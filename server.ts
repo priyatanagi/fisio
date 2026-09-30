@@ -1,0 +1,582 @@
+import express from 'express';
+import { createServer as createViteServer } from 'vite';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { GoogleGenAI } from '@google/genai';
+import { DEFAULT_BASE_SYSTEM_PROMPT, DEFAULT_NEGATIVE_PROMPT } from './src/config/defaultPrompts.js';
+import { ProviderConfig } from './src/types/provider.js';
+import { isCleanHtmlIncomplete, synthesizeCleanHtml } from './src/utils/cleanHtmlUtils.js';
+
+dotenv.config();
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+
+const DEFAULT_PORT = 3000;
+const MAX_PORT_ATTEMPTS = 10;
+
+const PORT: number = (() => {
+  const raw = process.env.PORT;
+  if (!raw || !raw.trim()) return DEFAULT_PORT;
+  const parsed = Number.parseInt(raw.trim(), 10);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    console.warn(`[Server] Invalid PORT="${raw}", falling back to ${DEFAULT_PORT}.`);
+    return DEFAULT_PORT;
+  }
+  return parsed;
+})();
+
+app.use(express.json({ limit: '25mb' }));
+
+// Helper to get Gemini client
+const getGeminiClient = (customKey?: string) => {
+  const apiKey = customKey || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY is not configured in server environment or provider settings.');
+  }
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+};
+
+// Generic helper to extract clean JSON string
+function cleanJsonOutput(raw: string): string {
+  let cleaned = raw.trim();
+  if (cleaned.startsWith('```json')) {
+    cleaned = cleaned.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+  } else if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```\s*/, '').replace(/\s*```$/, '');
+  }
+  return cleaned.trim();
+}
+
+// Ensure cleanHtml has the full complete article content (prevents "..." placeholder bug)
+function ensureCompleteCleanHtml(cleanHtml: string, inlineCssHtml: string, topic: string): string {
+  if (isCleanHtmlIncomplete(cleanHtml)) {
+    console.log('[Server] Synthesizing complete cleanHtml from inlineCssHtml to prevent truncated content...');
+    return synthesizeCleanHtml(inlineCssHtml, cleanHtml, topic);
+  }
+  return cleanHtml;
+}
+
+// Call Google Gemini API
+async function callGemini(fullPrompt: string, config?: ProviderConfig): Promise<string> {
+  const customKey = config?.apiKey?.trim();
+  const requestedModel = config?.model?.trim() || 'gemini-2.5-flash';
+  const ai = getGeminiClient(customKey);
+
+  // Candidate order prioritizes resilient models if quota limit is reached
+  const candidateModels: string[] = [requestedModel, 'gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+  const uniqueModels = Array.from(new Set(candidateModels));
+  let responseText = '';
+  let lastError: any = null;
+
+  for (const modelName of uniqueModels) {
+    let isRateLimited = false;
+
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        console.log(`[Gemini] Calling ${modelName} (attempt ${attempt})...`);
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: fullPrompt,
+          config: {
+            responseMimeType: 'application/json',
+            temperature: 0.7,
+          },
+        });
+        responseText = response.text || '';
+        if (responseText) return responseText;
+      } catch (err: any) {
+        const errMsg = String(err.message || err);
+        const is429 = err.status === 429 || errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota');
+
+        console.warn(`[Gemini] Model ${modelName} attempt ${attempt} error:`, errMsg);
+        lastError = err;
+
+        if (is429) {
+          isRateLimited = true;
+          console.warn(`[Gemini] Model ${modelName} hit quota limit, immediately switching to next candidate model...`);
+          break; // Do not retry the exact same exhausted model!
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
+      }
+    }
+
+    if (isRateLimited && modelName !== uniqueModels[uniqueModels.length - 1]) {
+      console.log(`[Gemini] Switching from rate-limited ${modelName} to next model...`);
+      continue;
+    }
+  }
+
+  const finalErrMsg = lastError?.message || 'Gemini API failed to return content.';
+  if (finalErrMsg.includes('429') || finalErrMsg.includes('RESOURCE_EXHAUSTED') || finalErrMsg.includes('quota')) {
+    throw new Error('Gemini API free tier quota limit was reached. You can switch to Gemini 3.1 Flash Lite or connect your own API key in Provider Settings (⌘P).');
+  }
+
+  throw new Error(finalErrMsg);
+}
+
+// Call OpenAI Compatible API
+async function callOpenAI(fullPrompt: string, config?: ProviderConfig): Promise<string> {
+  const apiKey = config?.apiKey?.trim();
+  if (!apiKey) {
+    throw new Error('API key is required for OpenAI Compatible provider.');
+  }
+
+  let baseUrl = config?.baseUrl?.trim() || 'https://api.openai.com/v1';
+  baseUrl = baseUrl.replace(/\/+$/, '');
+  const url = `${baseUrl}/chat/completions`;
+  const model = config?.model?.trim() || 'gpt-4o';
+
+  console.log(`[OpenAI-Compatible] Calling ${model} at ${url}...`);
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an Expert B2B Commercial Fitness SEO Strategist and Web Developer. You MUST output ONLY valid JSON matching the user schema. Do not write markdown wrappers or extraneous text.',
+        },
+        {
+          role: 'user',
+          content: fullPrompt,
+        },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.7,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`OpenAI-compatible endpoint returned status ${response.status}: ${errText}`);
+  }
+
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error('No content returned from OpenAI-compatible provider.');
+  }
+
+  return content;
+}
+
+// Call Anthropic Claude API
+async function callAnthropic(fullPrompt: string, config?: ProviderConfig): Promise<string> {
+  const apiKey = config?.apiKey?.trim();
+  if (!apiKey) {
+    throw new Error('API key is required for Anthropic Claude provider.');
+  }
+
+  let baseUrl = config?.baseUrl?.trim() || 'https://api.anthropic.com/v1';
+  baseUrl = baseUrl.replace(/\/+$/, '');
+  const url = `${baseUrl}/messages`;
+  const model = config?.model?.trim() || 'claude-3-7-sonnet-20250219';
+
+  console.log(`[Anthropic] Calling ${model} at ${url}...`);
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 8000,
+      system: 'You are an Expert B2B Commercial Fitness SEO Strategist and Web Developer. You MUST output ONLY valid raw JSON conforming strictly to the requested schema. Never output markdown codeblock ticks or preamble.',
+      messages: [
+        {
+          role: 'user',
+          content: fullPrompt,
+        },
+      ],
+      temperature: 0.7,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Anthropic endpoint returned status ${response.status}: ${errText}`);
+  }
+
+  const data = await response.json();
+  const text = data.content?.[0]?.text;
+  if (!text) {
+    throw new Error('No content returned from Anthropic provider.');
+  }
+
+  return text;
+}
+
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    hasKey: Boolean(process.env.GEMINI_API_KEY),
+    time: new Date().toISOString(),
+  });
+});
+
+// Test connection endpoint for any provider
+app.post('/api/test-provider', async (req, res) => {
+  try {
+    const { provider = 'gemini', model, apiKey, baseUrl } = req.body;
+    const testConfig: ProviderConfig = { provider, model, apiKey, baseUrl };
+
+    if (provider === 'openai') {
+      let url = testConfig.baseUrl?.trim() || 'https://api.openai.com/v1';
+      url = url.replace(/\/+$/, '');
+      const modelsUrl = `${url}/models`;
+      
+      const response = await fetch(modelsUrl, {
+        headers: {
+          Authorization: `Bearer ${testConfig.apiKey}`,
+        }
+      });
+      
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`OpenAI-compatible endpoint returned status ${response.status}: ${errText}`);
+      }
+      
+      const data = await response.json();
+      const modelsCount = data.data ? data.data.length : 0;
+      
+      return res.json({
+        success: true,
+        message: `Successfully connected! Found ${modelsCount} models. Base URL & API Key are valid.`,
+      });
+    }
+
+    const testPrompt = 'Respond strictly with valid JSON: {"status": "ok", "message": "connection successful"}';
+
+    let result = '';
+    if (provider === 'gemini') {
+      result = await callGemini(testPrompt, testConfig);
+    } else if (provider === 'anthropic') {
+      result = await callAnthropic(testPrompt, testConfig);
+    } else {
+      return res.status(400).json({ success: false, error: 'Unsupported provider' });
+    }
+
+    const cleaned = cleanJsonOutput(result);
+    JSON.parse(cleaned);
+
+    return res.json({
+      success: true,
+      message: `Successfully connected to ${provider.toUpperCase()} (${model || 'default'})!`,
+    });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      error: error.message || 'Connection test failed',
+    });
+  }
+});
+
+// Improve / Refine Article endpoint
+app.post('/api/improve-article', async (req, res) => {
+  try {
+    const { htmlContent, instruction, providerConfig } = req.body;
+    if (!htmlContent || !instruction) {
+      return res.status(400).json({ error: 'htmlContent and instruction are required.' });
+    }
+
+    const prompt = `You are an Expert SEO Content Strategist & Web Developer.
+Please improve the following commercial fitness article HTML according to this instruction:
+"${instruction}"
+
+RULES:
+- Preserve all valid HTML tags, <figure><img> tags, statistical callout boxes, and FAQs.
+- Do NOT add <h1> tags.
+- Return ONLY valid raw JSON:
+{
+  "improvedHtml": "YOUR FULL IMPROVED HTML HERE"
+}
+
+Article HTML to improve:
+${htmlContent}`;
+
+    const providerType = providerConfig?.provider || 'gemini';
+    let raw = '';
+    if (providerType === 'gemini') raw = await callGemini(prompt, providerConfig);
+    else if (providerType === 'openai') raw = await callOpenAI(prompt, providerConfig);
+    else if (providerType === 'anthropic') raw = await callAnthropic(prompt, providerConfig);
+
+    const parsed = JSON.parse(cleanJsonOutput(raw));
+    return res.json({ improvedHtml: parsed.improvedHtml || htmlContent });
+  } catch (err: any) {
+    console.error('Error improving article:', err);
+    return res.status(500).json({ error: err.message || 'Failed to improve article with AI.' });
+  }
+});
+
+// Generate Article endpoint
+app.post('/api/generate-article', async (req, res) => {
+  try {
+    const {
+      topic,
+      focusKeyphrase,
+      secondaryKeywords,
+      language = 'en',
+      lengthTarget = 'standard',
+      customWordCount,
+      targetFormats = ['inline-en', 'inline-id', 'clean-en', 'clean-id'],
+      systemPromptOverride,
+      negativePromptOverride,
+      providerConfig,
+    } = req.body;
+
+    if (!topic || typeof topic !== 'string' || !topic.trim()) {
+      return res.status(400).json({ error: 'Topic is required.' });
+    }
+
+    let targetWords = 950;
+    if (lengthTarget === 'short') targetWords = 650;
+    else if (lengthTarget === 'long') targetWords = 1500;
+    else if (lengthTarget === 'custom' && customWordCount) targetWords = Number(customWordCount);
+
+    const needsEnglish = targetFormats.some((f: string) => f.endsWith('-en')) || language === 'en';
+    const needsIndonesian = targetFormats.some((f: string) => f.endsWith('-id')) || language === 'id';
+
+    const providerType = providerConfig?.provider || 'gemini';
+
+    const buildPromptForLang = (langCode: 'en' | 'id') => {
+      const isIndo = langCode === 'id';
+      const langName = isIndo ? 'Bahasa Indonesia' : 'English (US)';
+
+      const basePrompt = (systemPromptOverride || DEFAULT_BASE_SYSTEM_PROMPT).replace(
+        '{{TARGET_WORD_COUNT}}',
+        `${targetWords} words (strict range ${Math.round(targetWords * 0.85)} – ${Math.round(targetWords * 1.15)})`
+      );
+
+      const negativePrompt = negativePromptOverride || DEFAULT_NEGATIVE_PROMPT;
+
+      const keyphraseInstruction = focusKeyphrase?.trim()
+        ? `- MANDATORY FOCUS KEYPHRASE TO USE: "${focusKeyphrase.trim()}". (Must appear in SEO Title, Meta Description, Paragraph 1, and H2/H3).`
+        : '- Focus Keyphrase: Extract the most commercially intent-driven keyphrase (max 20 chars).';
+
+      const secondaryKeywordsInstruction = secondaryKeywords?.trim()
+        ? `- Secondary Keywords / LSI Terms to integrate naturally: "${secondaryKeywords.trim()}".`
+        : '';
+
+      return `${basePrompt}
+
+---
+
+${negativePrompt}
+
+---
+
+**USER REQUEST & ASSIGNMENT:**
+- Topic / Article Theme: "${topic.trim()}"
+${keyphraseInstruction}
+${secondaryKeywordsInstruction}
+- Target Language: ${langName} (Must be written natively and professionally in ${langName} throughout the article, headers, callouts, and SEO metadata)
+- Target Content Length: ~${targetWords} words
+
+**CRITICAL INSTRUCTION - FORMATTED JSON OUTPUT ONLY:**
+CRITICAL: Output the ENTIRE, UNABBREVIATED ARTICLE TEXT. DO NOT WRITE '...' OR PLACEHOLDER TOKENS ANYWHERE. Both "inlineCssHtml" and "cleanHtml" must be complete from intro to conclusion, with all headings, paragraphs, figure/images, statistical callout boxes, and FAQs written out in full words.
+
+Output your response exclusively as a valid JSON object matching the following structure without any markdown backticks or commentary:
+
+{
+  "seoMetadata": {
+    "seoTitle": "Max 55 chars containing focus keyphrase",
+    "headline": "Catchy & Click-magnet headline",
+    "focusKeyphrase": "${focusKeyphrase?.trim() || 'Max 20 chars keyphrase'}",
+    "metaDescription": "Max 155 chars containing focus keyphrase",
+    "urlSlug": "kebab-case-wordpress-slug",
+    "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"]
+  },
+  "inlineCssHtml": "<article class=\\"fitness-article\\" style=\\"font-family: system-ui, -apple-system, sans-serif; color: #333940; line-height: 1.75; max-width: 820px; margin: 0 auto;\\"><h2>Primary Section Header</h2><p style=\\"font-size: 16px; margin-bottom: 20px;\\">Exhaustive first paragraph with stats and keyphrase...</p></article>",
+  "cleanHtml": "<style>:root { --primary: #cc2929; --dark: #1a1d20; --slate: #333940; --bg-neutral: #f8fafc; --border: #e2e8f0; } .commercial-fitness-post { font-family: system-ui, sans-serif; color: var(--slate); line-height: 1.75; max-width: 820px; margin: 0 auto; } .commercial-fitness-post h2 { color: var(--dark); border-left: 4px solid var(--primary); padding-left: 12px; } .commercial-fitness-post figure img { width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--border); } .data-callout { background: var(--bg-neutral); border-left: 4px solid var(--primary); padding: 20px; margin: 2em 0; } details.faq-item { background: var(--bg-neutral); border: 1px solid var(--border); border-radius: 6px; padding: 14px; margin-bottom: 12px; } </style>\\n<div id=\\"reading-progress\\"></div>\\n<article class=\\"commercial-fitness-post\\"><h2>Primary Section Header</h2><p>Exhaustive first paragraph with stats and keyphrase in semantic clean markup...</p></article>\\n<script>/* Reading progress, word count counter, accordion script */</script>",
+  "imagePrompts": [
+    {
+      "type": "featured",
+      "label": "Featured Image (16:9)",
+      "aspectRatio": "16:9",
+      "concept": "Main banner concept",
+      "prompt": "Commercial gym interior shot with premium Realleader strength equipment, high-end fitness center atmosphere, natural sunlight pouring through floor-to-ceiling windows, shot on Hasselblad H6D-100c, 35mm lens, f/2.8, hyper-realistic, ultra-detailed texture on rubber flooring and powder-coated steel frames, 8k resolution, photorealistic, cinematic composition, authentic gym environment, no CGI look --ar 16:9 --v 6.0"
+    },
+    {
+      "type": "illustration_1",
+      "label": "Article Illustration 1 (16:9)",
+      "aspectRatio": "16:9",
+      "concept": "Illustration 1 concept",
+      "prompt": "Close-up authentic commercial fitness setting, a professional gym member exercising, visible natural skin pores, subtle sweat sheen, fine facial hairs, natural skin tones, no airbrushing, shot on 85mm f/1.4 lens, crisp focus, soft background bokeh showing gym equipment, highly detailed texture, 8k resolution, photorealistic photography --ar 16:9 --v 6.0"
+    },
+    {
+      "type": "illustration_2",
+      "label": "Article Illustration 2 (4:3)",
+      "aspectRatio": "4:3",
+      "concept": "Illustration 2 concept",
+      "prompt": "Detailed hyper-realistic 8K prompt complete with camera settings, lighting, and material textures"
+    }
+  ],
+  "metrics": {
+    "wordCount": 980,
+    "readingTimeMinutes": 5,
+    "fleschScore": 65,
+    "sentenceCount": 55,
+    "statisticalHighlights": ["Highlight 1", "Highlight 2"]
+  }
+}`;
+    };
+
+    const callProvider = async (promptStr: string) => {
+      if (providerType === 'gemini') return await callGemini(promptStr, providerConfig);
+      if (providerType === 'openai') return await callOpenAI(promptStr, providerConfig);
+      if (providerType === 'anthropic') return await callAnthropic(promptStr, providerConfig);
+      throw new Error(`Unsupported provider: ${providerType}`);
+    };
+
+    let enData: any = null;
+    let idData: any = null;
+
+    if (needsEnglish && needsIndonesian) {
+      console.log('Generating English package first...');
+      const rawEn = await callProvider(buildPromptForLang('en'));
+      enData = JSON.parse(cleanJsonOutput(rawEn));
+
+      console.log('Generating Indonesian package next...');
+      try {
+        await new Promise((r) => setTimeout(r, 600));
+        const rawId = await callProvider(buildPromptForLang('id'));
+        idData = JSON.parse(cleanJsonOutput(rawId));
+      } catch (idErr: any) {
+        console.warn('Indonesian generation had issue, creating localized fallback from English package:', idErr.message);
+        idData = enData;
+      }
+    } else if (needsIndonesian) {
+      console.log('Generating Indonesian package...');
+      const rawId = await callProvider(buildPromptForLang('id'));
+      idData = JSON.parse(cleanJsonOutput(rawId));
+    } else {
+      console.log('Generating English package...');
+      const rawEn = await callProvider(buildPromptForLang('en'));
+      enData = JSON.parse(cleanJsonOutput(rawEn));
+    }
+
+    const primaryData = enData || idData;
+
+    // Apply the cleanHtml full-content safeguard to ensure cleanHtml is never empty or "..."
+    const formatsBundle: Record<string, string> = {};
+    if (enData) {
+      const fullCleanEn = ensureCompleteCleanHtml(enData.cleanHtml, enData.inlineCssHtml, topic);
+      formatsBundle['inline-en'] = enData.inlineCssHtml || '';
+      formatsBundle['clean-en'] = fullCleanEn;
+    }
+    if (idData) {
+      const fullCleanId = ensureCompleteCleanHtml(idData.cleanHtml, idData.inlineCssHtml, topic);
+      formatsBundle['inline-id'] = idData.inlineCssHtml || '';
+      formatsBundle['clean-id'] = fullCleanId;
+    }
+
+    // Calculate actual word count of primary content
+    const primaryHtml = formatsBundle['inline-en'] || formatsBundle['inline-id'] || primaryData.inlineCssHtml || '';
+    const textOnly = primaryHtml
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const actualWordCount = textOnly ? textOnly.split(/\s+/).length : targetWords;
+    const readingTime = Math.max(1, Math.ceil(actualWordCount / 200));
+
+    if (!primaryData.metrics) {
+      primaryData.metrics = {
+        wordCount: actualWordCount,
+        readingTimeMinutes: readingTime,
+        fleschScore: 66,
+      };
+    } else {
+      primaryData.metrics.wordCount = actualWordCount;
+      primaryData.metrics.readingTimeMinutes = readingTime;
+    }
+
+    const result = {
+      id: `art_${Date.now()}`,
+      topic,
+      focusKeyphrase: focusKeyphrase || primaryData.seoMetadata?.focusKeyphrase,
+      secondaryKeywords,
+      language: needsEnglish ? 'en' : 'id',
+      lengthTarget,
+      targetWordCount: targetWords,
+      targetFormats,
+      formats: formatsBundle,
+      seoMetadata: primaryData.seoMetadata,
+      seoMetadataEn: enData ? enData.seoMetadata : undefined,
+      seoMetadataId: idData ? idData.seoMetadata : undefined,
+      inlineCssHtml: formatsBundle['inline-en'] || formatsBundle['inline-id'] || '',
+      cleanHtml: formatsBundle['clean-en'] || formatsBundle['clean-id'] || '',
+      imagePrompts: primaryData.imagePrompts || [],
+      metrics: primaryData.metrics,
+      generatedAt: new Date().toISOString(),
+      providerUsed: `${providerType.toUpperCase()}: ${providerConfig?.model || 'default'}`,
+    };
+
+    return res.json(result);
+  } catch (error: any) {
+    console.error('Error generating article:', error);
+    return res.status(500).json({
+      error: error.message || 'An error occurred during article generation.',
+    });
+  }
+});
+
+function listenWithFallback(port: number, attemptsLeft: number = MAX_PORT_ATTEMPTS): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const server = app.listen(port, '0.0.0.0', () => {
+      console.log(`\n  Server ready - open in browser:  http://localhost:${port}\n  (bound to 0.0.0.0:${port}, reachable from other devices on your network)\n`);
+      resolve(port);
+    });
+
+    server.once('error', (err: NodeJS.ErrnoException) => {
+      server.close();
+      if (err.code !== 'EADDRINUSE' || attemptsLeft <= 1) {
+        return reject(err);
+      }
+      console.warn(`[Server] Port ${port} is in use, trying ${port + 1}...`);
+      listenWithFallback(port + 1, attemptsLeft - 1).then(resolve, reject);
+    });
+  });
+}
+
+async function startServer() {
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    app.use(express.static(path.resolve(__dirname, 'dist')));
+    app.get('*', (req, res) => {
+      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+    });
+  }
+
+  try {
+    await listenWithFallback(PORT);
+  } catch (err: any) {
+    console.error('[Server] Failed to start server:', err.message || err);
+    process.exit(1);
+  }
+}
+
+startServer();

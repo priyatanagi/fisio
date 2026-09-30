@@ -1,0 +1,6 @@
+{
+  "name": "FitSEO Architect",
+  "description": "Distraction-free SEO blog article generator with inline CSS, clean HTML, AI image prompts, and multi-format exports for commercial fitness.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
