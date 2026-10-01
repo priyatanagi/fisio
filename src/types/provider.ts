@@ -24,6 +24,26 @@ export const DEFAULT_PROVIDER_CONFIG: ProviderConfig = {
 
 export type MultiAgentConfig = Record<AgentRole, ProviderConfig>;
 
+/** A model offered by a provider. `id` is what gets sent in API requests. */
+export interface ModelInfo {
+  id: string;
+  /** Human label from the provider when it exposes one, otherwise the id. */
+  name: string;
+  provider: ProviderType;
+  /** Short capability note, e.g. '128K in · 16K out' or '4B params'. */
+  detail?: string;
+}
+
+export interface ModelCatalog {
+  models: ModelInfo[];
+  /** False when the provider listing failed and `models` is the built-in list. */
+  live: boolean;
+  provider: ProviderType;
+  error?: string;
+  /** Endpoint that was actually queried, which may come from env rather than the UI. */
+  endpoint?: string;
+}
+
 export const DEFAULT_MULTI_AGENT_CONFIG: MultiAgentConfig = {
   judge: { ...DEFAULT_PROVIDER_CONFIG },
   impower: { ...DEFAULT_PROVIDER_CONFIG },
@@ -39,6 +59,7 @@ export const PROVIDER_PRESETS: Record<
     description: string;
     defaultBaseUrl: string;
     defaultModel: string;
+    /** Offline fallback only; /api/models returns the provider's real catalog. */
     models: { id: string; name: string }[];
   }
 > = {

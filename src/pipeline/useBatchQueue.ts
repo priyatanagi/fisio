@@ -97,15 +97,14 @@ function updateRow(job: BatchJob, rowId: string, patch: Partial<BatchRow>): Batc
 
 export function batchQueueReducer(state: QueueState, action: QueueAction): QueueState {
   const { job } = state;
+
+  // Loading or clearing a job has to work on an empty queue; everything else
+  // describes rows inside a job that must exist.
+  if (action.type === 'LOAD_JOB') return { job: action.job };
+  if (action.type === 'CLEAR_JOB') return { job: null };
   if (!job) return state;
 
   switch (action.type) {
-    case 'LOAD_JOB':
-      return { job: action.job };
-
-    case 'CLEAR_JOB':
-      return { job: null };
-
     case 'SET_PAUSED':
       return { job: { ...job, isPaused: action.paused, updatedAt: new Date().toISOString() } };
 
@@ -272,6 +271,11 @@ export function useBatchQueue(options: UseBatchQueueOptions): UseBatchQueueResul
 
   const abortRef = useRef<AbortController | null>(null);
 
+  // Rows handed to a worker during the current start() session. jobRef only
+  // refreshes on re-render, so without this two concurrent workers can pick the
+  // same pending row.
+  const claimedRef = useRef<Set<string>>(new Set());
+
   // Persist on every status transition so a reload restores the queue.
   useEffect(() => {
     if (state.job) {
@@ -312,6 +316,8 @@ export function useBatchQueue(options: UseBatchQueueOptions): UseBatchQueueResul
         multiAgentConfig: optionsRef.current.multiAgentConfig,
         universalRules: optionsRef.current.universalRules,
         batchRefs: { jobId: job.jobId, rowId: row.rowId },
+        runId: job.jobId,
+        eventLabel: row.rowId,
         onStage: (stage, message) =>
           dispatch({ type: 'ROW_STAGE', rowId: row.rowId, stage, message }),
         signal,
@@ -370,6 +376,9 @@ export function useBatchQueue(options: UseBatchQueueOptions): UseBatchQueueResul
     abortRef.current = controller;
     const { signal } = controller;
 
+    const claimed = new Set<string>();
+    claimedRef.current = claimed;
+
     const worker = async () => {
       for (;;) {
         if (signal.aborted) return;
@@ -377,8 +386,9 @@ export function useBatchQueue(options: UseBatchQueueOptions): UseBatchQueueResul
         const current = jobRef.current;
         if (!current || current.isPaused) return;
 
-        const next = current.rows.find((r) => r.status === 'pending');
+        const next = current.rows.find((r) => r.status === 'pending' && !claimed.has(r.rowId));
         if (!next) return;
+        claimed.add(next.rowId);
 
         dispatch({ type: 'ROW_STAGE', rowId: next.rowId, stage: 'running', message: 'starting...' });
         await processRow(next.rowId, signal);
@@ -397,15 +407,21 @@ export function useBatchQueue(options: UseBatchQueueOptions): UseBatchQueueResul
     dispatch({ type: 'SET_PAUSED', paused: true });
   }, []);
 
-  const retryRow = useCallback(
-    (rowId: string) => dispatch({ type: 'RETRY_ROW', rowId }),
-    []
-  );
+  const retryRow = useCallback((rowId: string) => {
+    // Free the claim so a worker still running can pick this row up.
+    claimedRef.current.delete(rowId);
+    dispatch({ type: 'RETRY_ROW', rowId });
+  }, []);
   const setConcurrency = useCallback(
     (value: number) => dispatch({ type: 'SET_CONCURRENCY', concurrency: value }),
     []
   );
-  const loadJob = useCallback((job: BatchJob) => dispatch({ type: 'LOAD_JOB', job }), []);
+  const loadJob = useCallback((job: BatchJob) => {
+    // Callers often do `loadJob(job)` then `start()` in the same tick, and
+    // start() reads jobRef, so publish it before React re-renders.
+    jobRef.current = job;
+    dispatch({ type: 'LOAD_JOB', job });
+  }, []);
   const clearJob = useCallback(() => dispatch({ type: 'CLEAR_JOB' }), []);
 
   return {

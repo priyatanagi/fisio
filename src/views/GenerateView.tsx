@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { AlertCircle } from 'lucide-react';
 import type { GeneratedArticle } from '../types/article';
 import type { UserProfile } from '../types/profile';
@@ -10,6 +10,15 @@ import { putArticle } from '../db';
 import { PipelineSettingsPanel } from '../components/PipelineSettingsPanel';
 import { TopicConsole } from '../components/TopicConsole';
 import { ArticleWorkspace } from '../components/ArticleWorkspace';
+import { ActivityPanel } from '../components/ActivityPanel';
+import { useAgentEvents } from '../pipeline/useAgentEvents';
+import {
+  appendStage,
+  closeStages,
+  expectedStages,
+  groupAgentCalls,
+  type StageTiming,
+} from '../pipeline/agentActivity';
 
 interface GenerateViewProps {
   profile: UserProfile;
@@ -39,15 +48,55 @@ export const GenerateView: React.FC<GenerateViewProps> = ({
   const [activeFormat, setActiveFormat] = useState<'inline-en' | 'inline-id' | 'clean-en' | 'clean-id'>('inline-en');
   const [isGenerating, setIsGenerating] = useState(false);
   const [stageMessage, setStageMessage] = useState('');
+  const [timings, setTimings] = useState<StageTiming[]>([]);
+  // One id per run, shared with the server so its background activity can be
+  // polled back into the live panel.
+  const [runId, setRunId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // True while the current article is halted in the strict review gate, so the
   // workspace can offer Retry Creator / Skip to Designer.
   const [gateOpen, setGateOpen] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
   const lastRunRef = useRef<{
     seedTopic: string;
     focusKeyphrase?: string;
     toneOverride?: string;
   } | null>(null);
+
+  const events = useAgentEvents(runId, isGenerating);
+  const calls = useMemo(() => groupAgentCalls(events), [events]);
+  const stagePlan = useMemo(() => expectedStages(pipelineConfig), [pipelineConfig]);
+
+  const baseRunOptions = (): RunArticleOptions => {
+    const id = `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setRunId(id);
+    setTimings([]);
+    setStageMessage('');
+    return {
+      seedTopic: lastRunRef.current?.seedTopic ?? topic,
+      focusKeyphrase: lastRunRef.current?.focusKeyphrase,
+      toneOverride: lastRunRef.current?.toneOverride,
+      config: pipelineConfig,
+      profile,
+      multiAgentConfig,
+      universalRules,
+      runId: id,
+      onStage: (stage, message) => {
+        setStageMessage(message);
+        setTimings((previous) => appendStage(previous, stage, message, Date.now()));
+      },
+      signal: controller.signal,
+    };
+  };
+
+  const finishRun = () => {
+    setIsGenerating(false);
+    setStageMessage('');
+    setTimings((previous) => closeStages(previous, Date.now()));
+    abortRef.current = null;
+  };
 
   // History's "open" action hands off through sessionStorage.
   useEffect(() => {
@@ -67,20 +116,15 @@ export const GenerateView: React.FC<GenerateViewProps> = ({
     setIsGenerating(true);
     setError(null);
     setGateOpen(false);
+    lastRunRef.current = {
+      seedTopic: topic.trim(),
+      focusKeyphrase: focusKeyphrase || undefined,
+    };
 
     const runOptions: RunArticleOptions = {
-      seedTopic: topic,
+      ...baseRunOptions(),
+      seedTopic: topic.trim(),
       focusKeyphrase: focusKeyphrase || undefined,
-      config: pipelineConfig,
-      profile,
-      multiAgentConfig,
-      universalRules,
-      onStage: (_stage, message) => setStageMessage(message),
-      signal: new AbortController().signal,
-    };
-    lastRunRef.current = {
-      seedTopic: runOptions.seedTopic,
-      focusKeyphrase: runOptions.focusKeyphrase,
     };
 
     try {
@@ -89,22 +133,9 @@ export const GenerateView: React.FC<GenerateViewProps> = ({
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setIsGenerating(false);
-      setStageMessage('');
+      finishRun();
     }
   };
-
-  const buildResumeOptions = (): RunArticleOptions => ({
-    seedTopic: lastRunRef.current?.seedTopic ?? topic,
-    focusKeyphrase: lastRunRef.current?.focusKeyphrase,
-    toneOverride: lastRunRef.current?.toneOverride,
-    config: pipelineConfig,
-    profile,
-    multiAgentConfig,
-    universalRules,
-    onStage: (_stage, message) => setStageMessage(message),
-    signal: new AbortController().signal,
-  });
 
   // Persist the (re)built article and drive the gate state from the result.
   const commitResult = async (result: Awaited<ReturnType<typeof runArticle>>) => {
@@ -121,7 +152,7 @@ export const GenerateView: React.FC<GenerateViewProps> = ({
       );
       setGateOpen(true);
     } else if (result.status === 'failed') {
-      setError(result.error ?? 'Generation failed.');
+      setError(result.error === 'aborted' ? null : result.error ?? 'Generation failed.');
       setGateOpen(false);
     } else {
       setError(null);
@@ -134,15 +165,16 @@ export const GenerateView: React.FC<GenerateViewProps> = ({
     setIsGenerating(true);
     setError(null);
     try {
-      const result = await resumeArticle(currentArticle, buildResumeOptions(), action);
+      const result = await resumeArticle(currentArticle, baseRunOptions(), action);
       await commitResult(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setIsGenerating(false);
-      setStageMessage('');
+      finishRun();
     }
   };
+
+  const cancelRun = () => abortRef.current?.abort();
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
@@ -173,13 +205,24 @@ export const GenerateView: React.FC<GenerateViewProps> = ({
         setCustomWordCount={(count) => onPipelineChange({ ...pipelineConfig, targetWords: count })}
         isGenerating={isGenerating}
         onGenerate={handleGenerate}
+        statusLabel={
+          isGenerating
+            ? stageMessage || 'Working'
+            : runId
+              ? `${calls.length} provider call${calls.length === 1 ? '' : 's'} · last run`
+              : undefined
+        }
       />
 
-      {isGenerating && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 text-center space-y-3">
-          <div className="w-10 h-10 border-2 border-zinc-400 border-t-zinc-100 rounded-full animate-spin mx-auto" />
-          <p className="text-xs text-zinc-400 font-mono">{stageMessage || 'Working...'}</p>
-        </div>
+      {runId && (
+        <ActivityPanel
+          expected={stagePlan}
+          timings={timings}
+          calls={calls}
+          running={isGenerating}
+          stageMessage={stageMessage}
+          onCancel={isGenerating ? cancelRun : undefined}
+        />
       )}
 
       {currentArticle && !isGenerating && (

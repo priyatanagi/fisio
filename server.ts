@@ -1,4 +1,5 @@
 import express from 'express';
+import { createServer, type Server } from 'node:http';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -6,6 +7,9 @@ import { fileURLToPath } from 'url';
 import { callProvider, cleanJsonOutput } from './src/server/providers.js';
 import { ProviderConfig } from './src/types/provider.js';
 import { validateRoleOutput, buildRepairPrompt } from './src/server/roleSchemas.js';
+import { publishAgentEvent, readAgentEvents } from './src/server/agentEvents.js';
+import type { AgentEvent } from './src/types/agentEvents.js';
+import { listModels } from './src/server/modelCatalog.js';
 import {
   buildJudgePrompt,
   buildImpowerPrompt,
@@ -51,60 +55,28 @@ app.post('/api/test-provider', async (req, res) => {
     const { provider = 'gemini', model, apiKey, baseUrl } = req.body;
     const testConfig: ProviderConfig = { provider, model, apiKey, baseUrl };
 
-    if (provider === 'ollama') {
-      const url = (
-        testConfig.baseUrl?.trim() ||
-        process.env.OLLAMA_BASE_URL ||
-        'http://localhost:11434'
-      ).replace(/\/+$/, '');
+    // Listing the real catalog first means the message names models the
+    // provider actually offers, instead of only confirming the endpoint.
+    const catalog = await listModels(
+      { provider, apiKey, baseUrl },
+      { refresh: true }
+    );
+    const requested = typeof model === 'string' ? model.trim() : '';
+    const known = catalog.models.some((m) => m.id === requested);
+    const catalogLine = catalog.live
+      ? `Found ${catalog.models.length} model(s) available to this credential.`
+      : `Could not list models (${catalog.error}).`;
+    const missingLine =
+      requested && !known
+        ? ` "${requested}" is not in that list — it may still work if the provider hides it.`
+        : '';
 
-      const response = await fetch(`${url}/api/tags`);
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Ollama returned status ${response.status}: ${errText}`);
-      }
-
-      const data = await response.json();
-      const names: string[] = (data.models ?? []).map((m: any) => m.name);
-      const requested = testConfig.model?.trim();
-      const missing = requested && !names.includes(requested);
-
+    if (provider === 'ollama' || provider === 'openai') {
+      if (!catalog.live) throw new Error(catalog.error ?? 'Model listing failed.');
       return res.json({
         success: true,
-        message: missing
-          ? `Ollama is reachable at ${url}, but model "${requested}" is not pulled. Available: ${names.join(', ') || 'none'}.`
-          : `Successfully connected! Found ${names.length} local model(s): ${names.join(', ')}.`,
-      });
-    }
-
-    if (provider === 'openai') {
-      const apiKey = testConfig.apiKey?.trim() || process.env.OPENAI_API_KEY?.trim();
-      if (!apiKey) {
-        throw new Error('OPENAI_API_KEY is not configured in server environment or provider settings.');
-      }
-      const urlBase =
-        testConfig.baseUrl?.trim() ||
-        process.env.OPENAI_BASE_URL ||
-        'https://api.openai.com/v1';
-      const modelsUrl = `${urlBase.replace(/\/+$/, '')}/models`;
-
-      const response = await fetch(modelsUrl, {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        }
-      });
-      
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`OpenAI-compatible endpoint returned status ${response.status}: ${errText}`);
-      }
-      
-      const data = await response.json();
-      const modelsCount = data.data ? data.data.length : 0;
-      
-      return res.json({
-        success: true,
-        message: `Successfully connected! Found ${modelsCount} models. Base URL & API Key are valid.`,
+        message: `Successfully connected to ${provider.toUpperCase()}! ${catalogLine}${missingLine}`,
+        modelCount: catalog.models.length,
       });
     }
 
@@ -112,12 +84,14 @@ app.post('/api/test-provider', async (req, res) => {
 
     const result = await callProvider(testPrompt, testConfig);
 
-    const cleaned = cleanJsonOutput(result);
+    const cleaned = cleanJsonOutput(result.text);
     JSON.parse(cleaned);
 
     return res.json({
       success: true,
-      message: `Successfully connected to ${provider.toUpperCase()} (${model || 'default'})!`,
+      message: `Successfully connected to ${provider.toUpperCase()}! "${result.model}" answered the probe. ${catalogLine}${missingLine}`,
+      model: result.model,
+      modelCount: catalog.models.length,
     });
   } catch (error: any) {
     return res.status(400).json({
@@ -125,6 +99,29 @@ app.post('/api/test-provider', async (req, res) => {
       error: error.message || 'Connection test failed',
     });
   }
+});
+
+// Real model catalog for the provider/baseURL/key currently in the form.
+app.post('/api/models', async (req, res) => {
+  const { provider, apiKey, baseUrl, refresh } = req.body ?? {};
+  const supported = ['gemini', 'openai', 'anthropic', 'ollama'];
+  if (!supported.includes(provider)) {
+    return res.status(400).json({ ok: false, error: `Unsupported provider: ${provider}` });
+  }
+  const catalog = await listModels(
+    { provider, apiKey, baseUrl },
+    { refresh: Boolean(refresh) }
+  );
+  return res.json({ ok: true, ...catalog });
+});
+
+// Buffered background activity for a run, consumed by the UI as a live log.
+app.get('/api/events', (req, res) => {
+  const runId = String(req.query.runId ?? '');
+  const since = Number.parseInt(String(req.query.since ?? '0'), 10) || 0;
+  if (!runId) return res.status(400).json({ ok: false, error: 'runId is required' });
+  const { events, cursor } = readAgentEvents(runId, since);
+  return res.json({ ok: true, events, cursor });
 });
 
 function promptForRole(role: string, input: any, profile: any): string {
@@ -147,9 +144,35 @@ function promptForRole(role: string, input: any, profile: any): string {
 }
 
 app.post('/api/run-agent', async (req, res) => {
-  try {
-    const { role, input = {}, userProfile, providerConfig } = req.body;
+  const { role, input = {}, userProfile, providerConfig, runId, eventLabel, callId } =
+    req.body ?? {};
+  const trace =
+    typeof runId === 'string' && runId.trim() && role
+      ? {
+          runId: runId.trim(),
+          role,
+          label: typeof eventLabel === 'string' ? eventLabel : undefined,
+          callId: typeof callId === 'string' ? callId : undefined,
+        }
+      : undefined;
+  const startedAt = Date.now();
 
+  const report = (type: 'completed' | 'failed', extra: Partial<AgentEvent> = {}) => {
+    if (!trace) return;
+    publishAgentEvent({
+      runId: trace.runId,
+      role: trace.role,
+      label: trace.label,
+      callId: trace.callId,
+      type,
+      provider: providerConfig?.provider,
+      model: extra.model ?? providerConfig?.model ?? '',
+      durationMs: Date.now() - startedAt,
+      ...extra,
+    });
+  };
+
+  try {
     if (!role) return res.status(400).json({ ok: false, error: 'role is required' });
     if (!providerConfig?.provider) {
       return res.status(400).json({ ok: false, error: 'providerConfig is required' });
@@ -158,26 +181,71 @@ app.post('/api/run-agent', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'userProfile is required' });
     }
 
+    if (trace) {
+      publishAgentEvent({
+        runId: trace.runId,
+        role: trace.role,
+        label: trace.label,
+        callId: trace.callId,
+        type: 'call-start',
+        provider: providerConfig.provider,
+        model: providerConfig.model,
+        requestedModel: providerConfig.model,
+      });
+    }
+
     const prompt = promptForRole(role, input, userProfile);
 
-    let raw = await callProvider(prompt, providerConfig);
-    let result = validateRoleOutput(role as any, raw);
+    let call = await callProvider(prompt, providerConfig, trace);
+    let result = validateRoleOutput(role as any, call.text);
 
     // One repair attempt for shape problems. Transport failures already
     // exhausted the 429 ladder inside callProvider, so this is the only extra
     // call a bad response can cost.
     if (!result.ok) {
       console.warn(`[run-agent] ${role} returned invalid output, repairing:`, result.error);
-      raw = await callProvider(buildRepairPrompt(role as any, raw), providerConfig);
-      result = validateRoleOutput(role as any, raw);
+      if (trace) {
+        publishAgentEvent({
+          runId: trace.runId,
+          role: trace.role,
+          label: trace.label,
+          callId: trace.callId,
+          type: 'repair',
+          provider: providerConfig.provider,
+          model: call.model,
+          message: `Invalid output — ${result.error}`.slice(0, 200),
+        });
+      }
+      call = await callProvider(buildRepairPrompt(role as any, call.text), providerConfig, trace);
+      result = validateRoleOutput(role as any, call.text);
     }
 
     if (!result.ok) {
+      report('failed', { model: call.model, message: result.error });
       return res.status(502).json({ ok: false, error: result.error, recoverable: false });
     }
-    return res.json({ ok: true, data: result.data });
+    report('completed', {
+      model: call.model,
+      requestedModel: call.requestedModel,
+      attempts: call.attempts,
+      outputChars: call.text.length,
+      usage: call.usage,
+    });
+    return res.json({
+      ok: true,
+      data: result.data,
+      telemetry: {
+        provider: call.provider,
+        model: call.model,
+        requestedModel: call.requestedModel,
+        attempts: call.attempts,
+        usage: call.usage,
+        ms: Date.now() - startedAt,
+      },
+    });
   } catch (error: any) {
     console.error('[run-agent] failed:', error);
+    report('failed', { message: error?.message || 'Agent call failed' });
     return res.status(502).json({
       ok: false,
       error: error?.message || 'Agent call failed',
@@ -186,28 +254,45 @@ app.post('/api/run-agent', async (req, res) => {
   }
 });
 
-function listenWithFallback(port: number, attemptsLeft: number = MAX_PORT_ATTEMPTS): Promise<number> {
+function listenWithFallback(
+  server: Server,
+  port: number,
+  attemptsLeft: number = MAX_PORT_ATTEMPTS
+): Promise<number> {
   return new Promise<number>((resolve, reject) => {
-    const server = app.listen(port, '0.0.0.0', () => {
+    const onListening = () => {
+      server.removeListener('error', onError);
       console.log(`\n  Server ready - open in browser:  http://localhost:${port}\n  (bound to 0.0.0.0:${port}, reachable from other devices on your network)\n`);
       resolve(port);
-    });
+    };
 
-    server.once('error', (err: NodeJS.ErrnoException) => {
-      server.close();
+    function onError(err: NodeJS.ErrnoException) {
+      server.removeListener('listening', onListening);
       if (err.code !== 'EADDRINUSE' || attemptsLeft <= 1) {
         return reject(err);
       }
       console.warn(`[Server] Port ${port} is in use, trying ${port + 1}...`);
-      listenWithFallback(port + 1, attemptsLeft - 1).then(resolve, reject);
-    });
+      listenWithFallback(server, port + 1, attemptsLeft - 1).then(resolve, reject);
+    }
+
+    server.once('listening', onListening);
+    server.once('error', onError);
+    server.listen(port, '0.0.0.0');
   });
 }
 
 async function startServer() {
+  // One shared HTTP server: Vite runs in middleware mode, so without this it would
+  // open its own WebSocket on the fixed default port 24678 and collide with any
+  // other running instance.
+  const httpServer = createServer(app);
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        ws: { server: httpServer },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -219,7 +304,7 @@ async function startServer() {
   }
 
   try {
-    await listenWithFallback(PORT);
+    await listenWithFallback(httpServer, PORT);
   } catch (err: any) {
     console.error('[Server] Failed to start server:', err.message || err);
     process.exit(1);

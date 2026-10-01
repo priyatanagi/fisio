@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useBatchQueue, type BatchJob, type BatchRow } from '../pipeline/useBatchQueue';
 import { downloadAllAsZip, downloadBatchAsZip } from '../utils/exportUtils';
 import { listArticles } from '../db';
@@ -9,6 +9,10 @@ import type { UniversalRules } from '../config/universalRules';
 import type { PipelineConfig } from '../pipeline/stages';
 import { BatchUploadTable } from '../components/BatchUploadTable';
 import { BatchQueueTable } from '../components/BatchQueueTable';
+import { useAgentEvents } from '../pipeline/useAgentEvents';
+import { groupAgentCalls, type AgentCall } from '../pipeline/agentActivity';
+
+const IN_FLIGHT = ['running', 'judging', 'impowering', 'creating', 'reviewing', 'designing'];
 
 interface BatchViewProps {
   profile: UserProfile;
@@ -26,6 +30,26 @@ export const BatchView: React.FC<BatchViewProps> = (props) => {
   const [uploaded, setUploaded] = useState<BatchRow[]>([]);
   const [fileName, setFileName] = useState('');
   const [articles, setArticles] = useState<GeneratedArticle[]>([]);
+
+  const job = queue.state.job;
+  const inFlight = Boolean(job?.rows.some((row) => IN_FLIGHT.includes(row.status)));
+  const events = useAgentEvents(job?.jobId ?? null, inFlight);
+
+  // Server events carry the row id as their label, so each row gets its own
+  // live call list instead of one merged queue log.
+  const allCalls = useMemo(() => groupAgentCalls(events), [events]);
+  const callsByRow = useMemo(() => {
+    const grouped = new Map<string, typeof events>();
+    for (const event of events) {
+      const key = event.label ?? '';
+      const list = grouped.get(key);
+      if (list) list.push(event);
+      else grouped.set(key, [event]);
+    }
+    const out: Record<string, AgentCall[]> = {};
+    for (const [key, list] of grouped) out[key] = groupAgentCalls(list);
+    return out;
+  }, [events]);
 
   const startJob = () => {
     if (uploaded.length === 0) return;
@@ -68,8 +92,6 @@ export const BatchView: React.FC<BatchViewProps> = (props) => {
     if (matching.length > 0) await downloadBatchAsZip(matching);
   };
 
-  const job = queue.state.job;
-
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto space-y-6">
       <div>
@@ -85,6 +107,9 @@ export const BatchView: React.FC<BatchViewProps> = (props) => {
         <BatchQueueTable
           job={job}
           articles={articles}
+          allCalls={allCalls}
+          callsByRow={callsByRow}
+          live={inFlight}
           onStart={() => {
             if (job.rows.every((r) => r.status !== 'pending')) {
               const fresh: BatchJob = { ...job, isPaused: false, rows: job.rows.map((r) => ({ ...r })) };

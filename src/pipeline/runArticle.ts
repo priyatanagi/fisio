@@ -28,6 +28,8 @@ export interface RunArticleOptions {
   multiAgentConfig: MultiAgentConfig;
   universalRules: UniversalRules;
   batchRefs?: { jobId: string; rowId: string };
+  runId?: string;
+  eventLabel?: string;
   onStage: (stage: PipelineStage, message: string) => void;
   signal: AbortSignal;
 }
@@ -65,7 +67,7 @@ export function formatTargets(
 }
 
 function makeCall(options: RunArticleOptions) {
-  const { profile, multiAgentConfig, universalRules, signal } = options;
+  const { profile, multiAgentConfig, universalRules, signal, runId, eventLabel } = options;
   return (role: AnyRole, input: Record<string, unknown>) =>
     runAgent({
       role,
@@ -74,6 +76,8 @@ function makeCall(options: RunArticleOptions) {
       providerConfig: multiAgentConfig[role === 'research' ? 'impower' : role],
       universalRules,
       signal,
+      runId,
+      eventLabel,
     });
 }
 

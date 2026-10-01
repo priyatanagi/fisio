@@ -330,6 +330,15 @@ describe('job-level actions', () => {
     expect(s.job!.rows).toHaveLength(7);
   });
 
+  it('LOAD_JOB works on an empty queue, which is how a batch starts', () => {
+    const s = batchQueueReducer(initialQueueState, { type: 'LOAD_JOB', job: makeState(2).job! });
+    expect(s.job!.rows).toHaveLength(2);
+  });
+
+  it('CLEAR_JOB works on an empty queue', () => {
+    expect(batchQueueReducer(initialQueueState, { type: 'CLEAR_JOB' }).job).toBeNull();
+  });
+
   it('CLEAR_JOB empties the job', () => {
     expect(batchQueueReducer(makeState(3), { type: 'CLEAR_JOB' }).job).toBeNull();
   });

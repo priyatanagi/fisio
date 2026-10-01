@@ -33,6 +33,8 @@ interface TopicConsoleProps {
   setCustomWordCount: (c: number) => void;
   isGenerating: boolean;
   onGenerate: () => void;
+  /** Real stage text from the pipeline; replaces the generic button label. */
+  statusLabel?: string;
 }
 
 export const TopicConsole: React.FC<TopicConsoleProps> = ({
@@ -50,6 +52,7 @@ export const TopicConsole: React.FC<TopicConsoleProps> = ({
   setCustomWordCount,
   isGenerating,
   onGenerate,
+  statusLabel,
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [showKeywordDrawer, setShowKeywordDrawer] = useState<boolean>(false);
@@ -397,8 +400,8 @@ export const TopicConsole: React.FC<TopicConsoleProps> = ({
           >
             {isGenerating ? (
               <>
-                <Loader2 className="w-4 h-4 animate-spin text-zinc-400" />
-                <span>Architecting ({targetFormats.length} Formats)...</span>
+                <Loader2 className="w-4 h-4 animate-spin text-zinc-400 shrink-0" />
+                <span className="truncate">{statusLabel || 'Working...'}</span>
               </>
             ) : (
               <>

@@ -3,6 +3,7 @@ import { Check } from 'lucide-react';
 import { BrainCircuit, Search, Edit3, ClipboardCheck, Paintbrush } from 'lucide-react';
 import type { AgentRole, MultiAgentConfig, ProviderConfig, ProviderType } from '../types/provider';
 import { PROVIDER_PRESETS as PRESETS } from '../types/provider';
+import { ModelPicker } from '../components/ModelPicker';
 
 interface ProvidersViewProps {
   multiAgentConfig: MultiAgentConfig;
@@ -32,6 +33,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, 
   const [saved, setSaved] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // The saved config is the single source of truth: every edit persists through
@@ -83,6 +85,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, 
           ? { ok: true, message: data.message }
           : { ok: false, message: data.error ?? 'Connection test failed.' }
       );
+      if (res.ok && data.success) setReloadToken((token) => token + 1);
     } catch (err) {
       setTestResult({ ok: false, message: err instanceof Error ? err.message : 'Network error' });
     } finally {
@@ -115,8 +118,9 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, 
                 <span className="block text-[10px] opacity-70 mt-0.5 leading-tight">
                   {ROLE_INFO[role].desc}
                 </span>
-                <span className="inline-block mt-1.5 px-1.5 py-0.5 bg-zinc-950/50 rounded font-mono border border-zinc-800 text-[9px]">
-                  {multiAgentConfig[role].provider.toUpperCase()}
+                <span className="inline-block mt-1.5 px-1.5 py-0.5 bg-zinc-950/50 rounded font-mono border border-zinc-800 text-[9px] max-w-full truncate block">
+                  {multiAgentConfig[role].provider.toUpperCase()} ·{' '}
+                  {multiAgentConfig[role].model || 'no model'}
                 </span>
               </span>
             </button>
@@ -144,21 +148,14 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, 
             ))}
           </div>
 
-          <label className="block space-y-1">
-            <span className="text-[11px] text-zinc-400">Model identifier</span>
-            <input
-              type="text"
-              value={config.model}
-              onChange={(e) => update({ model: e.target.value })}
-              list={`models-${activeRole}`}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-[11px] font-mono text-zinc-100 outline-none focus:border-zinc-500"
-            />
-            <datalist id={`models-${activeRole}`}>
-              {preset.models.map((m) => (
-                <option key={m.id} value={m.id} />
-              ))}
-            </datalist>
-          </label>
+          <ModelPicker
+            provider={config.provider}
+            model={config.model}
+            baseUrl={config.baseUrl}
+            apiKey={config.apiKey}
+            reloadToken={reloadToken}
+            onChange={(value) => update({ model: value })}
+          />
 
           <label className="block space-y-1">
             <span className="text-[11px] text-zinc-400">Base URL</span>

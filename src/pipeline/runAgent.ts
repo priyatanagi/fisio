@@ -10,6 +10,10 @@ export interface RunAgentOptions {
   providerConfig: ProviderConfig;
   universalRules: UniversalRules;
   signal: AbortSignal;
+  /** Identifies the run whose background activity the UI is watching. */
+  runId?: string;
+  /** Sub-grouping inside a run, e.g. a batch row. */
+  eventLabel?: string;
 }
 
 export class AgentError extends Error {
@@ -24,6 +28,9 @@ export class AgentError extends Error {
 }
 
 export async function runAgent(options: RunAgentOptions): Promise<any> {
+  const callId = options.runId
+    ? `${options.role}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+    : undefined;
   let response: Response;
   try {
     response = await fetch('/api/run-agent', {
@@ -36,6 +43,9 @@ export async function runAgent(options: RunAgentOptions): Promise<any> {
         userProfile: options.userProfile,
         providerConfig: options.providerConfig,
         universalRules: options.universalRules,
+        runId: options.runId,
+        eventLabel: options.eventLabel,
+        callId,
       }),
     });
   } catch (err) {
