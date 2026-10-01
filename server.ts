@@ -3,7 +3,7 @@ import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI } from '@google/genai';
+import { callProvider, cleanJsonOutput, callGemini, callOpenAI, callAnthropic } from './src/server/providers.js';
 import { DEFAULT_BASE_SYSTEM_PROMPT, DEFAULT_NEGATIVE_PROMPT } from './src/config/defaultPrompts.js';
 import { ProviderConfig } from './src/types/provider.js';
 import { isCleanHtmlIncomplete, synthesizeCleanHtml } from './src/utils/cleanHtmlUtils.js';
@@ -29,33 +29,6 @@ const PORT: number = (() => {
 
 app.use(express.json({ limit: '25mb' }));
 
-// Helper to get Gemini client
-const getGeminiClient = (customKey?: string) => {
-  const apiKey = customKey || process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is not configured in server environment or provider settings.');
-  }
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
-};
-
-// Generic helper to extract clean JSON string
-function cleanJsonOutput(raw: string): string {
-  let cleaned = raw.trim();
-  if (cleaned.startsWith('```json')) {
-    cleaned = cleaned.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-  } else if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```\s*/, '').replace(/\s*```$/, '');
-  }
-  return cleaned.trim();
-}
-
 // Ensure cleanHtml has the full complete article content (prevents "..." placeholder bug)
 function ensureCompleteCleanHtml(cleanHtml: string, inlineCssHtml: string, topic: string): string {
   if (isCleanHtmlIncomplete(cleanHtml)) {
@@ -63,165 +36,6 @@ function ensureCompleteCleanHtml(cleanHtml: string, inlineCssHtml: string, topic
     return synthesizeCleanHtml(inlineCssHtml, cleanHtml, topic);
   }
   return cleanHtml;
-}
-
-// Call Google Gemini API
-async function callGemini(fullPrompt: string, config?: ProviderConfig): Promise<string> {
-  const customKey = config?.apiKey?.trim();
-  const requestedModel = config?.model?.trim() || 'gemini-2.5-flash';
-  const ai = getGeminiClient(customKey);
-
-  // Candidate order prioritizes resilient models if quota limit is reached
-  const candidateModels: string[] = [requestedModel, 'gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
-  const uniqueModels = Array.from(new Set(candidateModels));
-  let responseText = '';
-  let lastError: any = null;
-
-  for (const modelName of uniqueModels) {
-    let isRateLimited = false;
-
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        console.log(`[Gemini] Calling ${modelName} (attempt ${attempt})...`);
-        const response = await ai.models.generateContent({
-          model: modelName,
-          contents: fullPrompt,
-          config: {
-            responseMimeType: 'application/json',
-            temperature: 0.7,
-          },
-        });
-        responseText = response.text || '';
-        if (responseText) return responseText;
-      } catch (err: any) {
-        const errMsg = String(err.message || err);
-        const is429 = err.status === 429 || errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota');
-
-        console.warn(`[Gemini] Model ${modelName} attempt ${attempt} error:`, errMsg);
-        lastError = err;
-
-        if (is429) {
-          isRateLimited = true;
-          console.warn(`[Gemini] Model ${modelName} hit quota limit, immediately switching to next candidate model...`);
-          break; // Do not retry the exact same exhausted model!
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
-      }
-    }
-
-    if (isRateLimited && modelName !== uniqueModels[uniqueModels.length - 1]) {
-      console.log(`[Gemini] Switching from rate-limited ${modelName} to next model...`);
-      continue;
-    }
-  }
-
-  const finalErrMsg = lastError?.message || 'Gemini API failed to return content.';
-  if (finalErrMsg.includes('429') || finalErrMsg.includes('RESOURCE_EXHAUSTED') || finalErrMsg.includes('quota')) {
-    throw new Error('Gemini API free tier quota limit was reached. You can switch to Gemini 3.1 Flash Lite or connect your own API key in Provider Settings (⌘P).');
-  }
-
-  throw new Error(finalErrMsg);
-}
-
-// Call OpenAI Compatible API
-async function callOpenAI(fullPrompt: string, config?: ProviderConfig): Promise<string> {
-  const apiKey = config?.apiKey?.trim();
-  if (!apiKey) {
-    throw new Error('API key is required for OpenAI Compatible provider.');
-  }
-
-  let baseUrl = config?.baseUrl?.trim() || 'https://api.openai.com/v1';
-  baseUrl = baseUrl.replace(/\/+$/, '');
-  const url = `${baseUrl}/chat/completions`;
-  const model = config?.model?.trim() || 'gpt-4o';
-
-  console.log(`[OpenAI-Compatible] Calling ${model} at ${url}...`);
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        {
-          role: 'system',
-          content: 'You are an Expert B2B Commercial Fitness SEO Strategist and Web Developer. You MUST output ONLY valid JSON matching the user schema. Do not write markdown wrappers or extraneous text.',
-        },
-        {
-          role: 'user',
-          content: fullPrompt,
-        },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.7,
-    }),
-  });
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`OpenAI-compatible endpoint returned status ${response.status}: ${errText}`);
-  }
-
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error('No content returned from OpenAI-compatible provider.');
-  }
-
-  return content;
-}
-
-// Call Anthropic Claude API
-async function callAnthropic(fullPrompt: string, config?: ProviderConfig): Promise<string> {
-  const apiKey = config?.apiKey?.trim();
-  if (!apiKey) {
-    throw new Error('API key is required for Anthropic Claude provider.');
-  }
-
-  let baseUrl = config?.baseUrl?.trim() || 'https://api.anthropic.com/v1';
-  baseUrl = baseUrl.replace(/\/+$/, '');
-  const url = `${baseUrl}/messages`;
-  const model = config?.model?.trim() || 'claude-3-7-sonnet-20250219';
-
-  console.log(`[Anthropic] Calling ${model} at ${url}...`);
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 8000,
-      system: 'You are an Expert B2B Commercial Fitness SEO Strategist and Web Developer. You MUST output ONLY valid raw JSON conforming strictly to the requested schema. Never output markdown codeblock ticks or preamble.',
-      messages: [
-        {
-          role: 'user',
-          content: fullPrompt,
-        },
-      ],
-      temperature: 0.7,
-    }),
-  });
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Anthropic endpoint returned status ${response.status}: ${errText}`);
-  }
-
-  const data = await response.json();
-  const text = data.content?.[0]?.text;
-  if (!text) {
-    throw new Error('No content returned from Anthropic provider.');
-  }
-
-  return text;
 }
 
 // Health check endpoint
@@ -266,14 +80,7 @@ app.post('/api/test-provider', async (req, res) => {
 
     const testPrompt = 'Respond strictly with valid JSON: {"status": "ok", "message": "connection successful"}';
 
-    let result = '';
-    if (provider === 'gemini') {
-      result = await callGemini(testPrompt, testConfig);
-    } else if (provider === 'anthropic') {
-      result = await callAnthropic(testPrompt, testConfig);
-    } else {
-      return res.status(400).json({ success: false, error: 'Unsupported provider' });
-    }
+    const result = await callProvider(testPrompt, testConfig);
 
     const cleaned = cleanJsonOutput(result);
     JSON.parse(cleaned);
@@ -356,6 +163,7 @@ app.post('/api/generate-article', async (req, res) => {
     const needsIndonesian = targetFormats.some((f: string) => f.endsWith('-id')) || language === 'id';
 
     const providerType = providerConfig?.provider || 'gemini';
+    const resolvedProviderConfig: ProviderConfig = { ...providerConfig, provider: providerType };
 
     const buildMasterPrompt = (langCode: 'en' | 'id') => {
       const isIndo = langCode === 'id';
@@ -459,16 +267,9 @@ ${markdown}
       }
     };
 
-    const callProvider = async (promptStr: string) => {
-      if (providerType === 'gemini') return await callGemini(promptStr, providerConfig);
-      if (providerType === 'openai') return await callOpenAI(promptStr, providerConfig);
-      if (providerType === 'anthropic') return await callAnthropic(promptStr, providerConfig);
-      throw new Error(`Unsupported provider: ${providerType}`);
-    };
-
     const processLanguage = async (langCode: 'en' | 'id') => {
       console.log(`Generating Master Markdown for ${langCode}...`);
-      const masterRaw = await callProvider(buildMasterPrompt(langCode));
+      const masterRaw = await callProvider(buildMasterPrompt(langCode), resolvedProviderConfig);
       const masterData = JSON.parse(cleanJsonOutput(masterRaw));
       
       const formatPromises = [];
@@ -478,7 +279,7 @@ ${markdown}
       if (targetFormats.includes(`clean-${langCode}`)) {
         console.log(`Converting to Clean HTML for ${langCode}...`);
         formatPromises.push(
-          callProvider(buildFormatPrompt(masterData.markdownContent, 'clean', langCode))
+          callProvider(buildFormatPrompt(masterData.markdownContent, 'clean', langCode), resolvedProviderConfig)
             .then(raw => { cleanHtml = JSON.parse(cleanJsonOutput(raw)).cleanHtml || ''; })
         );
       }
@@ -486,7 +287,7 @@ ${markdown}
       if (targetFormats.includes(`inline-${langCode}`)) {
         console.log(`Converting to Inline CSS HTML for ${langCode}...`);
         formatPromises.push(
-          callProvider(buildFormatPrompt(masterData.markdownContent, 'inline', langCode))
+          callProvider(buildFormatPrompt(masterData.markdownContent, 'inline', langCode), resolvedProviderConfig)
             .then(raw => { inlineCssHtml = JSON.parse(cleanJsonOutput(raw)).inlineCssHtml || ''; })
         );
       }
