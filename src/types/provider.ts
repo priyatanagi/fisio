@@ -5,6 +5,7 @@ export interface ProviderConfig {
   model: string;
   apiKey?: string;
   baseUrl?: string;
+  savedConfigs?: Record<string, { model: string; apiKey: string; baseUrl: string }>;
 }
 
 export const DEFAULT_PROVIDER_CONFIG: ProviderConfig = {
@@ -12,6 +13,11 @@ export const DEFAULT_PROVIDER_CONFIG: ProviderConfig = {
   model: 'gemini-3.1-flash-lite',
   baseUrl: '',
   apiKey: '',
+  savedConfigs: {
+    gemini: { model: 'gemini-3.1-flash-lite', apiKey: '', baseUrl: '' },
+    openai: { model: 'gpt-4o', apiKey: '', baseUrl: 'https://api.openai.com/v1' },
+    anthropic: { model: 'claude-3-7-sonnet-20250219', apiKey: '', baseUrl: 'https://api.anthropic.com/v1' },
+  },
 };
 
 export const PROVIDER_PRESETS: Record<

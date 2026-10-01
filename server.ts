@@ -357,7 +357,7 @@ app.post('/api/generate-article', async (req, res) => {
 
     const providerType = providerConfig?.provider || 'gemini';
 
-    const buildPromptForLang = (langCode: 'en' | 'id') => {
+    const buildMasterPrompt = (langCode: 'en' | 'id') => {
       const isIndo = langCode === 'id';
       const langName = isIndo ? 'Bahasa Indonesia' : 'English (US)';
 
@@ -392,7 +392,7 @@ ${secondaryKeywordsInstruction}
 - Target Content Length: ~${targetWords} words
 
 **CRITICAL INSTRUCTION - FORMATTED JSON OUTPUT ONLY:**
-CRITICAL: Output the ENTIRE, UNABBREVIATED ARTICLE TEXT. DO NOT WRITE '...' OR PLACEHOLDER TOKENS ANYWHERE. Both "inlineCssHtml" and "cleanHtml" must be complete from intro to conclusion, with all headings, paragraphs, figure/images, statistical callout boxes, and FAQs written out in full words.
+CRITICAL: Output the ENTIRE, UNABBREVIATED ARTICLE TEXT in Markdown format. DO NOT WRITE '...' OR PLACEHOLDER TOKENS ANYWHERE.
 
 Output your response exclusively as a valid JSON object matching the following structure without any markdown backticks or commentary:
 
@@ -405,29 +405,14 @@ Output your response exclusively as a valid JSON object matching the following s
     "urlSlug": "kebab-case-wordpress-slug",
     "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"]
   },
-  "inlineCssHtml": "<article class=\\"fitness-article\\" style=\\"font-family: system-ui, -apple-system, sans-serif; color: #333940; line-height: 1.75; max-width: 820px; margin: 0 auto;\\"><h2>Primary Section Header</h2><p style=\\"font-size: 16px; margin-bottom: 20px;\\">Exhaustive first paragraph with stats and keyphrase...</p></article>",
-  "cleanHtml": "<style>:root { --primary: #cc2929; --dark: #1a1d20; --slate: #333940; --bg-neutral: #f8fafc; --border: #e2e8f0; } .commercial-fitness-post { font-family: system-ui, sans-serif; color: var(--slate); line-height: 1.75; max-width: 820px; margin: 0 auto; } .commercial-fitness-post h2 { color: var(--dark); border-left: 4px solid var(--primary); padding-left: 12px; } .commercial-fitness-post figure img { width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--border); } .data-callout { background: var(--bg-neutral); border-left: 4px solid var(--primary); padding: 20px; margin: 2em 0; } details.faq-item { background: var(--bg-neutral); border: 1px solid var(--border); border-radius: 6px; padding: 14px; margin-bottom: 12px; } </style>\\n<div id=\\"reading-progress\\"></div>\\n<article class=\\"commercial-fitness-post\\"><h2>Primary Section Header</h2><p>Exhaustive first paragraph with stats and keyphrase in semantic clean markup...</p></article>\\n<script>/* Reading progress, word count counter, accordion script */</script>",
+  "markdownContent": "# Primary Section Header\\n\\nExhaustive first paragraph with stats and keyphrase...",
   "imagePrompts": [
     {
       "type": "featured",
       "label": "Featured Image (16:9)",
       "aspectRatio": "16:9",
       "concept": "Main banner concept",
-      "prompt": "Commercial gym interior shot with premium Realleader strength equipment, high-end fitness center atmosphere, natural sunlight pouring through floor-to-ceiling windows, shot on Hasselblad H6D-100c, 35mm lens, f/2.8, hyper-realistic, ultra-detailed texture on rubber flooring and powder-coated steel frames, 8k resolution, photorealistic, cinematic composition, authentic gym environment, no CGI look --ar 16:9 --v 6.0"
-    },
-    {
-      "type": "illustration_1",
-      "label": "Article Illustration 1 (16:9)",
-      "aspectRatio": "16:9",
-      "concept": "Illustration 1 concept",
-      "prompt": "Close-up authentic commercial fitness setting, a professional gym member exercising, visible natural skin pores, subtle sweat sheen, fine facial hairs, natural skin tones, no airbrushing, shot on 85mm f/1.4 lens, crisp focus, soft background bokeh showing gym equipment, highly detailed texture, 8k resolution, photorealistic photography --ar 16:9 --v 6.0"
-    },
-    {
-      "type": "illustration_2",
-      "label": "Article Illustration 2 (4:3)",
-      "aspectRatio": "4:3",
-      "concept": "Illustration 2 concept",
-      "prompt": "Detailed hyper-realistic 8K prompt complete with camera settings, lighting, and material textures"
+      "prompt": "Commercial gym interior shot with premium Realleader strength equipment..."
     }
   ],
   "metrics": {
@@ -440,6 +425,40 @@ Output your response exclusively as a valid JSON object matching the following s
 }`;
     };
 
+    const buildFormatPrompt = (markdown: string, formatType: 'clean' | 'inline', langCode: 'en' | 'id') => {
+      const langName = langCode === 'id' ? 'Bahasa Indonesia' : 'English (US)';
+      if (formatType === 'clean') {
+        return `You are an Expert Web Developer. Convert the following Markdown article into Clean Semantic HTML.
+Target Language: ${langName}
+RULES:
+- Preserve all content, headings, lists, and structure exactly as written.
+- Do NOT use inline CSS (no style="...").
+- Use <article>, <h2>, <p>, <ul>, <strong>, <figure>, <img> etc.
+- Output ONLY valid JSON containing the converted HTML.
+
+Markdown Content:
+${markdown}
+
+{
+  "cleanHtml": "<style>:root { --primary: #cc2929; --dark: #1a1d20; --slate: #333940; --bg-neutral: #f8fafc; --border: #e2e8f0; } .commercial-fitness-post { font-family: system-ui, sans-serif; color: var(--slate); line-height: 1.75; max-width: 820px; margin: 0 auto; } .commercial-fitness-post h2 { color: var(--dark); border-left: 4px solid var(--primary); padding-left: 12px; } .commercial-fitness-post figure img { width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--border); } .data-callout { background: var(--bg-neutral); border-left: 4px solid var(--primary); padding: 20px; margin: 2em 0; } details.faq-item { background: var(--bg-neutral); border: 1px solid var(--border); border-radius: 6px; padding: 14px; margin-bottom: 12px; } </style>\\n<div id=\\"reading-progress\\"></div>\\n<article class=\\"commercial-fitness-post\\">...</article>\\n<script>/* Reading progress, word count counter, accordion script */</script>"
+}`;
+      } else {
+        return `You are an Expert Web Developer. Convert the following Markdown article into Inline CSS HTML.
+Target Language: ${langName}
+RULES:
+- Preserve all content, headings, lists, and structure exactly as written.
+- Apply professional inline CSS styling (e.g., style="font-family: system-ui; color: #333; line-height: 1.6;") to EVERY tag.
+- Output ONLY valid JSON containing the converted HTML.
+
+Markdown Content:
+${markdown}
+
+{
+  "inlineCssHtml": "<article class=\\"fitness-article\\" style=\\"font-family: system-ui, -apple-system, sans-serif; color: #333940; line-height: 1.75; max-width: 820px; margin: 0 auto;\\"><h2>Primary Section Header</h2><p style=\\"font-size: 16px; margin-bottom: 20px;\\">Exhaustive first paragraph...</p></article>"
+}`;
+      }
+    };
+
     const callProvider = async (promptStr: string) => {
       if (providerType === 'gemini') return await callGemini(promptStr, providerConfig);
       if (providerType === 'openai') return await callOpenAI(promptStr, providerConfig);
@@ -447,54 +466,83 @@ Output your response exclusively as a valid JSON object matching the following s
       throw new Error(`Unsupported provider: ${providerType}`);
     };
 
+    const processLanguage = async (langCode: 'en' | 'id') => {
+      console.log(\`Generating Master Markdown for \${langCode}...\`);
+      const masterRaw = await callProvider(buildMasterPrompt(langCode));
+      const masterData = JSON.parse(cleanJsonOutput(masterRaw));
+      
+      const formatPromises = [];
+      let cleanHtml = '';
+      let inlineCssHtml = '';
+      
+      if (targetFormats.includes(\`clean-\${langCode}\`)) {
+        console.log(\`Converting to Clean HTML for \${langCode}...\`);
+        formatPromises.push(
+          callProvider(buildFormatPrompt(masterData.markdownContent, 'clean', langCode))
+            .then(raw => { cleanHtml = JSON.parse(cleanJsonOutput(raw)).cleanHtml || ''; })
+        );
+      }
+      
+      if (targetFormats.includes(\`inline-\${langCode}\`)) {
+        console.log(\`Converting to Inline CSS HTML for \${langCode}...\`);
+        formatPromises.push(
+          callProvider(buildFormatPrompt(masterData.markdownContent, 'inline', langCode))
+            .then(raw => { inlineCssHtml = JSON.parse(cleanJsonOutput(raw)).inlineCssHtml || ''; })
+        );
+      }
+      
+      await Promise.all(formatPromises);
+      
+      return {
+        ...masterData,
+        cleanHtml,
+        inlineCssHtml
+      };
+    };
+
     let enData: any = null;
     let idData: any = null;
 
     if (needsEnglish && needsIndonesian) {
-      console.log('Generating English package first...');
-      const rawEn = await callProvider(buildPromptForLang('en'));
-      enData = JSON.parse(cleanJsonOutput(rawEn));
+      console.log('Generating English package...');
+      enData = await processLanguage('en');
 
-      console.log('Generating Indonesian package next...');
+      console.log('Generating Indonesian package...');
       try {
         await new Promise((r) => setTimeout(r, 600));
-        const rawId = await callProvider(buildPromptForLang('id'));
-        idData = JSON.parse(cleanJsonOutput(rawId));
+        idData = await processLanguage('id');
       } catch (idErr: any) {
         console.warn('Indonesian generation had issue, creating localized fallback from English package:', idErr.message);
         idData = enData;
       }
     } else if (needsIndonesian) {
       console.log('Generating Indonesian package...');
-      const rawId = await callProvider(buildPromptForLang('id'));
-      idData = JSON.parse(cleanJsonOutput(rawId));
+      idData = await processLanguage('id');
     } else {
       console.log('Generating English package...');
-      const rawEn = await callProvider(buildPromptForLang('en'));
-      enData = JSON.parse(cleanJsonOutput(rawEn));
+      enData = await processLanguage('en');
     }
 
     const primaryData = enData || idData;
 
-    // Apply the cleanHtml full-content safeguard to ensure cleanHtml is never empty or "..."
+    // We no longer use ensureCompleteCleanHtml here because the format tasks directly generate full HTML from markdown.
     const formatsBundle: Record<string, string> = {};
     if (enData) {
-      const fullCleanEn = ensureCompleteCleanHtml(enData.cleanHtml, enData.inlineCssHtml, topic);
       formatsBundle['inline-en'] = enData.inlineCssHtml || '';
-      formatsBundle['clean-en'] = fullCleanEn;
+      formatsBundle['clean-en'] = enData.cleanHtml || '';
     }
     if (idData) {
-      const fullCleanId = ensureCompleteCleanHtml(idData.cleanHtml, idData.inlineCssHtml, topic);
       formatsBundle['inline-id'] = idData.inlineCssHtml || '';
-      formatsBundle['clean-id'] = fullCleanId;
+      formatsBundle['clean-id'] = idData.cleanHtml || '';
     }
 
     // Calculate actual word count of primary content
-    const primaryHtml = formatsBundle['inline-en'] || formatsBundle['inline-id'] || primaryData.inlineCssHtml || '';
+    const primaryHtml = formatsBundle['inline-en'] || formatsBundle['inline-id'] || formatsBundle['clean-en'] || formatsBundle['clean-id'] || '';
     const textOnly = primaryHtml
       .replace(/<[^>]*>/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+
     const actualWordCount = textOnly ? textOnly.split(/\s+/).length : targetWords;
     const readingTime = Math.max(1, Math.ceil(actualWordCount / 200));
 

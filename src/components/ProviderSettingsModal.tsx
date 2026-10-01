@@ -29,9 +29,25 @@ export const ProviderSettingsModal: React.FC<ProviderSettingsModalProps> = ({
   onSaveConfig,
 }) => {
   const [activeProvider, setActiveProvider] = useState<ProviderType>(providerConfig.provider);
-  const [model, setModel] = useState<string>(providerConfig.model);
-  const [apiKey, setApiKey] = useState<string>(providerConfig.apiKey || '');
-  const [baseUrl, setBaseUrl] = useState<string>(providerConfig.baseUrl || '');
+
+  const [configs, setConfigs] = useState<Record<string, { model: string; apiKey: string; baseUrl: string }>>(() => {
+    const defaultConfigs = {
+      gemini: { model: 'gemini-3.1-flash-lite', apiKey: '', baseUrl: '' },
+      openai: { model: 'gpt-4o', apiKey: '', baseUrl: 'https://api.openai.com/v1' },
+      anthropic: { model: 'claude-3-7-sonnet-20250219', apiKey: '', baseUrl: 'https://api.anthropic.com/v1' }
+    };
+    const initial = providerConfig.savedConfigs ? JSON.parse(JSON.stringify(providerConfig.savedConfigs)) : defaultConfigs;
+    initial[providerConfig.provider] = {
+      model: providerConfig.model || initial[providerConfig.provider].model,
+      apiKey: providerConfig.apiKey || initial[providerConfig.provider].apiKey || '',
+      baseUrl: providerConfig.baseUrl || initial[providerConfig.provider].baseUrl || ''
+    };
+    return initial;
+  });
+
+  const [model, setModel] = useState<string>(configs[providerConfig.provider]?.model || '');
+  const [apiKey, setApiKey] = useState<string>(configs[providerConfig.provider]?.apiKey || '');
+  const [baseUrl, setBaseUrl] = useState<string>(configs[providerConfig.provider]?.baseUrl || '');
   const [showKey, setShowKey] = useState<boolean>(false);
 
   const [isTesting, setIsTesting] = useState<boolean>(false);
@@ -43,10 +59,20 @@ export const ProviderSettingsModal: React.FC<ProviderSettingsModalProps> = ({
   const currentPreset = PROVIDER_PRESETS[activeProvider];
 
   const handleProviderChange = (newProvider: ProviderType) => {
+    setConfigs(prev => ({
+      ...prev,
+      [activeProvider]: { model, apiKey, baseUrl }
+    }));
+    
     setActiveProvider(newProvider);
+    
+    // We get the stored values for the *new* provider. We can safely read them from the current 'configs' state.
+    const saved = configs[newProvider];
     const preset = PROVIDER_PRESETS[newProvider];
-    setModel(preset.defaultModel);
-    setBaseUrl(preset.defaultBaseUrl);
+    
+    setModel(saved?.model || preset.defaultModel);
+    setApiKey(saved?.apiKey || '');
+    setBaseUrl(saved?.baseUrl || preset.defaultBaseUrl);
     setTestResult(null);
   };
 
@@ -89,11 +115,21 @@ export const ProviderSettingsModal: React.FC<ProviderSettingsModalProps> = ({
   };
 
   const handleSave = () => {
+    const finalConfigs = {
+      ...configs,
+      [activeProvider]: {
+        model: model.trim() || currentPreset.defaultModel,
+        apiKey: apiKey.trim(),
+        baseUrl: baseUrl.trim(),
+      }
+    };
+    
     const updated: ProviderConfig = {
       provider: activeProvider,
-      model: model.trim() || currentPreset.defaultModel,
-      apiKey: apiKey.trim(),
-      baseUrl: baseUrl.trim(),
+      model: finalConfigs[activeProvider].model,
+      apiKey: finalConfigs[activeProvider].apiKey,
+      baseUrl: finalConfigs[activeProvider].baseUrl,
+      savedConfigs: finalConfigs
     };
 
     onSaveConfig(updated);
