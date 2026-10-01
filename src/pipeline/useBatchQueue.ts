@@ -1,7 +1,12 @@
+import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { runArticle } from './runArticle';
+import { putArticle, putJob } from '../db';
+import type { UserProfile } from '../types/profile';
+import type { UniversalRules } from '../config/universalRules';
+import type { MultiAgentConfig } from '../types/provider';
 import type {
   ImpowerLevel,
   PipelineConfig,
-  PipelineStage,
   ReviewerMode,
   ReviewReport,
 } from './stages';
@@ -59,7 +64,7 @@ export type QueueAction =
   | { type: 'CLAIM_ROWS' }
   | { type: 'SET_PAUSED'; paused: boolean }
   | { type: 'SET_CONCURRENCY'; concurrency: number }
-  | { type: 'ROW_STAGE'; rowId: string; stage: PipelineStage; message: string }
+  | { type: 'ROW_STAGE'; rowId: string; stage: RowStatus; message: string }
   | { type: 'ROW_DONE'; rowId: string; articleId: string; reviewReport: ReviewReport | null }
   | { type: 'ROW_FAILED'; rowId: string; error: string }
   | { type: 'ROW_ABORTED'; rowId: string }
@@ -220,4 +225,198 @@ export function batchQueueReducer(state: QueueState, action: QueueAction): Queue
     default:
       return state;
   }
+}
+
+export interface UseBatchQueueOptions {
+  profile: UserProfile;
+  multiAgentConfig: MultiAgentConfig;
+  universalRules: UniversalRules;
+}
+
+export interface UseBatchQueueResult {
+  state: QueueState;
+  loadJob: (job: BatchJob) => void;
+  clearJob: () => void;
+  start: () => void;
+  pause: () => void;
+  resume: () => void;
+  cancel: () => void;
+  retryRow: (rowId: string) => void;
+  setConcurrency: (value: number) => void;
+}
+
+export function targetWordsFor(row: BatchRow, job: BatchJob): number {
+  switch (row.targetLength) {
+    case 'short':
+      return 600;
+    case 'long':
+      return 1500;
+    case 'custom':
+      return job.customWordCount;
+    default:
+      return 950;
+  }
+}
+
+export function useBatchQueue(options: UseBatchQueueOptions): UseBatchQueueResult {
+  const [state, dispatch] = useReducer(batchQueueReducer, initialQueueState);
+
+  // jobRef is the single source of truth for the current job inside async
+  // callbacks. Reading state.job directly inside a worker would capture a stale
+  // closure and re-run the same row forever.
+  const jobRef = useRef<BatchJob | null>(null);
+  jobRef.current = state.job;
+
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Persist on every status transition so a reload restores the queue.
+  useEffect(() => {
+    if (state.job) {
+      void putJob(state.job as unknown as { jobId: string; createdAt: string; updatedAt: string });
+    }
+  }, [state.job]);
+
+  // A reload or view unmount must not leave rows stranded mid-flight.
+  useEffect(() => {
+    const onUnload = () => dispatch({ type: 'RESET_IN_FLIGHT' });
+    window.addEventListener('beforeunload', onUnload);
+    return () => {
+      window.removeEventListener('beforeunload', onUnload);
+      dispatch({ type: 'RESET_IN_FLIGHT' });
+    };
+  }, []);
+
+  const processRow = useCallback(async (rowId: string, signal: AbortSignal) => {
+    const job = jobRef.current;
+    if (!job) return;
+    const row = job.rows.find((r) => r.rowId === rowId);
+    if (!row) return;
+
+    const config = {
+      ...job.globalConfig,
+      impower: row.impowerOverride || job.globalConfig.impower,
+      reviewer: row.reviewerOverride || job.globalConfig.reviewer,
+      targetWords: targetWordsFor(row, job),
+    };
+
+    try {
+      const result = await runArticle({
+        seedTopic: row.seedTopic,
+        focusKeyphrase: row.focusKeyphrase || undefined,
+        toneOverride: row.toneOverride,
+        config,
+        profile: optionsRef.current.profile,
+        multiAgentConfig: optionsRef.current.multiAgentConfig,
+        universalRules: optionsRef.current.universalRules,
+        batchRefs: { jobId: job.jobId, rowId: row.rowId },
+        onStage: (stage, message) =>
+          dispatch({ type: 'ROW_STAGE', rowId: row.rowId, stage, message }),
+        signal,
+      });
+
+      if (result.error === 'aborted') {
+        dispatch({ type: 'ROW_ABORTED', rowId: row.rowId });
+        return;
+      }
+
+      if (result.status === 'done' && result.article) {
+        await putArticle(result.article);
+        dispatch({
+          type: 'ROW_DONE',
+          rowId: row.rowId,
+          articleId: result.article.id,
+          reviewReport: result.reviewReport ?? null,
+        });
+        return;
+      }
+
+      if (result.status === 'needs_attention') {
+        if (result.article) await putArticle(result.article);
+        dispatch({
+          type: 'ROW_ATTENTION',
+          rowId: row.rowId,
+          articleId: result.article?.id ?? null,
+          reviewReport: result.reviewReport!,
+        });
+        return;
+      }
+
+      dispatch({
+        type: 'ROW_FAILED',
+        rowId: row.rowId,
+        error: result.error ?? 'Generation failed',
+      });
+    } catch (err) {
+      if (signal.aborted) {
+        dispatch({ type: 'ROW_ABORTED', rowId: row.rowId });
+      } else {
+        dispatch({
+          type: 'ROW_FAILED',
+          rowId: row.rowId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }, []);
+
+  const start = useCallback(() => {
+    const job = jobRef.current;
+    if (!job) return;
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const { signal } = controller;
+
+    const worker = async () => {
+      for (;;) {
+        if (signal.aborted) return;
+
+        const current = jobRef.current;
+        if (!current || current.isPaused) return;
+
+        const next = current.rows.find((r) => r.status === 'pending');
+        if (!next) return;
+
+        dispatch({ type: 'ROW_STAGE', rowId: next.rowId, stage: 'running', message: 'starting...' });
+        await processRow(next.rowId, signal);
+      }
+    };
+
+    void Promise.all(Array.from({ length: job.concurrency }, worker));
+  }, [processRow]);
+
+  const pause = useCallback(() => dispatch({ type: 'SET_PAUSED', paused: true }), []);
+  const resume = useCallback(() => dispatch({ type: 'SET_PAUSED', paused: false }), []);
+
+  const cancel = useCallback(() => {
+    abortRef.current?.abort();
+    dispatch({ type: 'RESET_IN_FLIGHT' });
+    dispatch({ type: 'SET_PAUSED', paused: true });
+  }, []);
+
+  const retryRow = useCallback(
+    (rowId: string) => dispatch({ type: 'RETRY_ROW', rowId }),
+    []
+  );
+  const setConcurrency = useCallback(
+    (value: number) => dispatch({ type: 'SET_CONCURRENCY', concurrency: value }),
+    []
+  );
+  const loadJob = useCallback((job: BatchJob) => dispatch({ type: 'LOAD_JOB', job }), []);
+  const clearJob = useCallback(() => dispatch({ type: 'CLEAR_JOB' }), []);
+
+  return {
+    state,
+    loadJob,
+    clearJob,
+    start,
+    pause,
+    resume,
+    cancel,
+    retryRow,
+    setConcurrency,
+  };
 }
