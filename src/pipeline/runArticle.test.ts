@@ -24,7 +24,7 @@ vi.mock('./runAgent', () => ({
   },
 }));
 
-import { runArticle } from './runArticle';
+import { runArticle, resumeArticle } from './runArticle';
 import { DEFAULT_USER_PROFILE } from '../types/profile';
 import { DEFAULT_UNIVERSAL_RULES } from '../config/universalRules';
 import type { PipelineConfig } from './stages';
@@ -289,5 +289,112 @@ describe('failure handling', () => {
     });
     expect(result.status).toBe('failed');
     expect(result.error).toContain('provider exploded');
+  });
+});
+
+function makeStalled(): any {
+  return {
+    id: 'art_stalled_1',
+    topic: 'Choosing a commercial treadmill',
+    focusKeyphrase: 'kw',
+    secondaryKeywords: 'a, b',
+    language: 'en',
+    lengthTarget: 'custom',
+    targetWordCount: 900,
+    targetFormats: ['inline-en'],
+    formats: {},
+    seoMetadata: brief.seoMetadata,
+    inlineCssHtml: '',
+    cleanHtml: '',
+    imagePrompts: [],
+    metrics: { wordCount: 12, readingTimeMinutes: 1, fleschScore: 0 },
+    generatedAt: new Date().toISOString(),
+    rawText: markdown,
+    pipelineConfig: baseConfig,
+    profileSnapshot: DEFAULT_USER_PROFILE,
+    reviewReport: fail,
+    reviewPassed: false,
+  };
+}
+
+async function resume(
+  action: 'retry_creator' | 'skip_designer',
+  handlers: Record<string, any>,
+  stalled: any = makeStalled()
+) {
+  for (const key of Object.keys(calls)) delete calls[key];
+  (globalThis as any).__handlers = handlers;
+  return resumeArticle(
+    stalled,
+    {
+      seedTopic: 'Treadmill buying',
+      focusKeyphrase: 'treadmill',
+      config: { ...baseConfig, reviewer: 'strict' },
+      profile: DEFAULT_USER_PROFILE,
+      multiAgentConfig,
+      universalRules: DEFAULT_UNIVERSAL_RULES,
+      onStage: () => {},
+      signal: new AbortController().signal,
+    },
+    action
+  );
+}
+
+describe('resumeArticle — skip to designer', () => {
+  it('renders only the Designer and keeps the same article id', async () => {
+    const result = await resume('skip_designer', {
+      designer: () => ({ html, warnings: [] }),
+    });
+    expect(calls.creator).toBeUndefined();
+    expect(calls.reviewer).toBeUndefined();
+    expect(calls.designer).toBe(1);
+    expect(result.status).toBe('done');
+    expect(result.article!.id).toBe('art_stalled_1');
+    expect(result.article!.formats['inline-en']).toBe(html);
+  });
+
+  it('never calls the Reviewer even in strict mode', async () => {
+    await resume('skip_designer', {
+      reviewer: () => pass,
+      designer: () => ({ html, warnings: [] }),
+    });
+    expect(calls.reviewer).toBeUndefined();
+  });
+
+  it('returns failed when the Designer throws', async () => {
+    const result = await resume('skip_designer', {
+      designer: () => new Error('designer exploded'),
+    });
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('designer exploded');
+  });
+});
+
+describe('resumeArticle — retry creator', () => {
+  it('runs Creator, Reviewer, then Designer when the retry passes', async () => {
+    const result = await resume('retry_creator', {
+      creator: () => ({ markdownContent: markdown }),
+      reviewer: () => pass,
+      designer: () => ({ html, warnings: [] }),
+    });
+    expect(calls.creator).toBe(1);
+    expect(calls.reviewer).toBe(1);
+    expect(calls.designer).toBe(1);
+    expect(result.status).toBe('done');
+    expect(result.article!.reviewPassed).toBe(true);
+    expect(result.article!.id).toBe('art_stalled_1');
+  });
+
+  it('halts again with no Designer call when the retry still fails', async () => {
+    const result = await resume('retry_creator', {
+      creator: () => ({ markdownContent: markdown }),
+      reviewer: () => fail,
+    });
+    expect(calls.creator).toBe(2);
+    expect(calls.reviewer).toBe(2);
+    expect(calls.designer).toBeUndefined();
+    expect(result.status).toBe('needs_attention');
+    expect(result.article!.id).toBe('art_stalled_1');
+    expect(result.article!.rawText).toContain('Some body content');
   });
 });

@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AlertCircle } from 'lucide-react';
 import type { GeneratedArticle } from '../types/article';
 import type { UserProfile } from '../types/profile';
 import type { MultiAgentConfig } from '../types/provider';
 import type { UniversalRules } from '../config/universalRules';
 import type { PipelineConfig } from '../pipeline/stages';
-import { runArticle } from '../pipeline/runArticle';
+import { runArticle, resumeArticle, type RunArticleOptions } from '../pipeline/runArticle';
 import { putArticle } from '../db';
 import { PipelineSettingsPanel } from '../components/PipelineSettingsPanel';
 import { TopicConsole } from '../components/TopicConsole';
@@ -40,6 +40,14 @@ export const GenerateView: React.FC<GenerateViewProps> = ({
   const [isGenerating, setIsGenerating] = useState(false);
   const [stageMessage, setStageMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // True while the current article is halted in the strict review gate, so the
+  // workspace can offer Retry Creator / Skip to Designer.
+  const [gateOpen, setGateOpen] = useState(false);
+  const lastRunRef = useRef<{
+    seedTopic: string;
+    focusKeyphrase?: string;
+    toneOverride?: string;
+  } | null>(null);
 
   // History's "open" action hands off through sessionStorage.
   useEffect(() => {
@@ -58,34 +66,76 @@ export const GenerateView: React.FC<GenerateViewProps> = ({
     if (!topic.trim() || isGenerating) return;
     setIsGenerating(true);
     setError(null);
+    setGateOpen(false);
+
+    const runOptions: RunArticleOptions = {
+      seedTopic: topic,
+      focusKeyphrase: focusKeyphrase || undefined,
+      config: pipelineConfig,
+      profile,
+      multiAgentConfig,
+      universalRules,
+      onStage: (_stage, message) => setStageMessage(message),
+      signal: new AbortController().signal,
+    };
+    lastRunRef.current = {
+      seedTopic: runOptions.seedTopic,
+      focusKeyphrase: runOptions.focusKeyphrase,
+    };
 
     try {
-      const result = await runArticle({
-        seedTopic: topic,
-        focusKeyphrase: focusKeyphrase || undefined,
-        config: pipelineConfig,
-        profile,
-        multiAgentConfig,
-        universalRules,
-        onStage: (_stage, message) => setStageMessage(message),
-        signal: new AbortController().signal,
-      });
+      const result = await runArticle(runOptions);
+      commitResult(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsGenerating(false);
+      setStageMessage('');
+    }
+  };
 
-      if (result.status === 'needs_attention') {
-        setError(
-          'The reviewer blocked this article. Read the report in the article panel, then retry the Creator or skip to the Designer.'
-        );
-      } else if (result.status === 'failed') {
-        setError(result.error ?? 'Generation failed.');
-      }
+  const buildResumeOptions = (): RunArticleOptions => ({
+    seedTopic: lastRunRef.current?.seedTopic ?? topic,
+    focusKeyphrase: lastRunRef.current?.focusKeyphrase,
+    toneOverride: lastRunRef.current?.toneOverride,
+    config: pipelineConfig,
+    profile,
+    multiAgentConfig,
+    universalRules,
+    onStage: (_stage, message) => setStageMessage(message),
+    signal: new AbortController().signal,
+  });
 
-      if (result.article) {
-        await putArticle(result.article);
-        onUpdateArticle(result.article);
-        setCurrentArticle(result.article);
-        const first = result.article.targetFormats?.[0];
-        if (first) setActiveFormat(first);
-      }
+  // Persist the (re)built article and drive the gate state from the result.
+  const commitResult = async (result: Awaited<ReturnType<typeof runArticle>>) => {
+    if (result.article) {
+      await putArticle(result.article);
+      onUpdateArticle(result.article);
+      setCurrentArticle(result.article);
+      const first = result.article.targetFormats?.[0];
+      if (first) setActiveFormat(first);
+    }
+    if (result.status === 'needs_attention') {
+      setError(
+        'The reviewer blocked this article. Read the report in the article panel, then retry the Creator or skip to the Designer.'
+      );
+      setGateOpen(true);
+    } else if (result.status === 'failed') {
+      setError(result.error ?? 'Generation failed.');
+      setGateOpen(false);
+    } else {
+      setError(null);
+      setGateOpen(false);
+    }
+  };
+
+  const runResume = async (action: 'retry_creator' | 'skip_designer') => {
+    if (!currentArticle || isGenerating) return;
+    setIsGenerating(true);
+    setError(null);
+    try {
+      const result = await resumeArticle(currentArticle, buildResumeOptions(), action);
+      await commitResult(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -139,6 +189,8 @@ export const GenerateView: React.FC<GenerateViewProps> = ({
           activeFormat={activeFormat}
           onSelectFormat={setActiveFormat}
           profile={profile}
+          onRetryCreator={gateOpen ? () => runResume('retry_creator') : undefined}
+          onSkipToDesigner={gateOpen ? () => runResume('skip_designer') : undefined}
         />
       )}
     </div>

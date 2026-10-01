@@ -6883,12 +6883,15 @@ Record any deviation.
 
 Result: **verified by deterministic tests, not 12 live browser runs.** `runArticle.test.ts` asserts the exact provider-call count for each cell of the matrix (Impower off/lite/standard/max × Reviewer off/advisory/strict), including the "forces exactly one revision then halts" case. All 17 of its cases pass. The live floor run in Step 3 confirms the Ollama transport that these counts ride on. No deviation from the table.
 
-- [ ] **Step 5: Verify the review gate**
+- [x] **Step 5: Verify the review gate**
 
 Force a failure by configuring the Reviewer role with a model that returns a low score, or by asking it to fail on a topic with invented statistics.
 Expected: exactly one automatic Creator revision, then a halt with visible **Retry Creator** and **Skip to Designer** actions. The Markdown remains readable and copyable.
 
-Result: **PARTIALLY verified — the halt works, the discrete action buttons do not exist yet.** The gate logic is confirmed by `runArticle.test.ts` (strict + failing review → Creator called twice, Reviewer twice, Designer not called, status `needs_attention`, markdown retained). The UI surfaces the halt and preserves the readable/copyable Markdown (GenerateView shows the report banner; ArticleWorkspace renders the creator markdown). But the **Retry Creator / Skip to Designer** buttons described here are NOT implemented as article-panel actions — `onRetry` only exists per-row in `BatchQueueTable`, and `runArticle` exposes no resume-from-creator / skip-to-designer entry point. **Open gap, deliberately left unchecked.** Tracked as a follow-up below (see Step 11).
+Result: **implemented and verified.** The gate logic is covered by `runArticle.test.ts` (strict + failing review → Creator twice, Reviewer twice, Designer not called, status `needs_attention`, Markdown retained). `resumeArticle(article, options, action)` (new in `src/pipeline/runArticle.ts`) is the resume entry point the panel drives:
+- **Retry Creator** (`action: 'retry_creator'`) resets the gate by re-running the full Creator → Reviewer → (one strict revision) cycle, then Designer if it clears — otherwise it halts again.
+- **Skip to Designer** (`action: 'skip_designer'`) renders the retained Markdown straight through the Designer fan-out, no re-review.
+Both keep the same `article.id`, so the rebuilt record replaces the stalled one instead of duplicating it. Verified by 5 new `resumeArticle` tests (skip renders Designer only / never Reviewer / returns failed on throw; retry pass runs all three and sets `reviewPassed`; retry still-fail halts with no Designer). `ArticleWorkspace` renders the halt banner with both buttons only when the gate is open; `GenerateView` wires them to `resumeArticle`. App loads with no runtime errors after the wiring. A forced live halt was not run this pass (the local Ollama reviewer verdict is non-deterministic and slow); the buttons drive the same `resumeArticle` code the tests exercise.
 
 - [x] **Step 6: Verify profile snapshot immutability**
 
@@ -6941,9 +6944,9 @@ Provider availability this pass: a **free local provider (Ollama, `gemma4:e4b`) 
 Honest verification-method breakdown:
 - **Live, real Ollama inference:** Step 1 (checks), Step 2 (health), Step 3 (floor = 2 calls, article produced end-to-end).
 - **Deterministic unit tests (authoritative for logic), plus code inspection:** Steps 4, 6, 7, 8, 9, 10. These behaviours are not browser-only logic — they are exercised by the test suite — but they were NOT each re-run as a manual paid/interactive click-through this pass.
-- **Open gap (left unchecked):** Step 5 — the review-gate *halt*, retained Markdown, and visible report are correct, but discrete **Retry Creator** / **Skip to Designer** buttons are not implemented in the article panel. This is the one substantive finding and is the recommended follow-up before the app is considered feature-complete against the spec.
+- **Step 5 was an open gap at first record, now closed:** the discrete **Retry Creator** / **Skip to Designer** article-panel actions were implemented via `resumeArticle` and covered by 5 new tests. (See Step 5 result above.)
 
-- [ ] **Step 12: Commit any fixes**
+- [x] **Step 12: Commit any fixes**
 
 ```bash
 git add -A
@@ -6952,7 +6955,7 @@ git commit -m "fix: address findings from end-to-end verification"
 
 Omit this commit if Step 11 found nothing.
 
-Note: Step 11 found one open gap (Step 5 action buttons) rather than a defect to hot-fix, so it is captured as a follow-up instead of patched here. The Ollama provider that made this free verification possible was committed separately (`feat(providers): add local Ollama provider for zero-cost testing`).
+Note: Step 11 found one real gap (Step 5 had no resume actions), which is now fixed in code and committed (`feat(review-gate): resume a halted article via Retry Creator / Skip to Designer`). The Ollama provider that made this free verification possible was committed separately (`feat(providers): add local Ollama provider for zero-cost testing`).
 
 ---
 

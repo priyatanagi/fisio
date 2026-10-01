@@ -37,6 +37,7 @@ import {
   RefreshCw,
   Sliders,
   Undo2,
+  AlertCircle,
 } from 'lucide-react';
 import { GeneratedArticle, OutputFormatId } from '../types/article';
 import type { UserProfile } from '../types/profile';
@@ -54,6 +55,9 @@ interface ArticleWorkspaceProps {
   activeFormat?: OutputFormatId;
   onSelectFormat?: (format: OutputFormatId) => void;
   profile: UserProfile;
+  /** Present only when the strict reviewer halted this article. */
+  onRetryCreator?: () => void;
+  onSkipToDesigner?: () => void;
 }
 
 const FORMAT_OPTIONS: { id: OutputFormatId; name: string; lang: 'en' | 'id'; desc: string }[] = [
@@ -89,6 +93,8 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
   activeFormat: controlledFormat,
   onSelectFormat,
   profile,
+  onRetryCreator,
+  onSkipToDesigner,
 }) => {
   // Active Format for Results panel
   const [internalFormat, setInternalFormat] = useState<OutputFormatId>('inline-en');
@@ -336,6 +342,41 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Review Gate Banner — shown only when the strict reviewer halted this draft */}
+      {onRetryCreator && onSkipToDesigner && (
+        <div className="bg-amber-950/40 border border-amber-700 rounded-xl p-4 space-y-3">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-amber-100">
+                Reviewer halted this draft
+              </h3>
+              <p className="text-xs text-amber-200/80 mt-0.5 leading-relaxed">
+                The strict reviewer did not clear it after one automatic revision. The Markdown
+                below stays fully readable and copyable. Retry the Creator for a fresh attempt, or
+                skip straight to the Designer to render the current draft as-is.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 pl-8">
+            <button
+              onClick={onRetryCreator}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-amber-950 font-semibold text-xs transition-colors"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Retry Creator</span>
+            </button>
+            <button
+              onClick={onSkipToDesigner}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 text-zinc-100 font-semibold text-xs transition-colors"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span>Skip to Designer</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Top Metrics Summary Bar */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 sm:p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
         <div className="flex flex-wrap items-center gap-3 sm:gap-5">

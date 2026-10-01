@@ -64,11 +64,9 @@ export function formatTargets(
     .filter((t) => languages.includes(t.language));
 }
 
-export async function runArticle(options: RunArticleOptions): Promise<RunArticleResult> {
-  const { config, profile, multiAgentConfig, universalRules, signal, onStage } = options;
-  const seedTopic = options.seedTopic.trim();
-
-  const call = (role: AnyRole, input: Record<string, unknown>) =>
+function makeCall(options: RunArticleOptions) {
+  const { profile, multiAgentConfig, universalRules, signal } = options;
+  return (role: AnyRole, input: Record<string, unknown>) =>
     runAgent({
       role,
       input,
@@ -77,6 +75,172 @@ export async function runArticle(options: RunArticleOptions): Promise<RunArticle
       universalRules,
       signal,
     });
+}
+
+interface CreatorPhase {
+  /** False only when the strict reviewer halted after its single revision. */
+  ready: boolean;
+  creator: CreatorOutput;
+  brief: ImpowerOutput;
+  report?: ReviewReport;
+}
+
+/** Stage 3 (Creator) + Stage 4 (Reviewer, including the one strict revision). */
+async function runCreatorAndReviewer(
+  options: RunArticleOptions,
+  base: { refinedTopic: string; brief: ImpowerOutput | null; judge?: JudgeOutput }
+): Promise<CreatorPhase> {
+  const { config, onStage } = options;
+  const call = makeCall(options);
+  const { refinedTopic } = base;
+  let brief = base.brief;
+
+  onStage('creating', 'Writing the article markdown...');
+  let creator = (await call('creator', {
+    seedTopic: refinedTopic,
+    targetWords: config.targetWords,
+    brief,
+    toneOverride: options.toneOverride ?? '',
+    extraInstructions: '',
+  })) as CreatorOutput;
+
+  if (!brief) brief = resolveBrief(creator, refinedTopic, options.focusKeyphrase ?? '');
+
+  let report: ReviewReport | undefined;
+  let needsAttention = false;
+
+  if (config.reviewer !== 'off') {
+    onStage(
+      'reviewing',
+      config.reviewer === 'advisory' ? 'Auditing (advisory)...' : 'Auditing...'
+    );
+    report = (await call('reviewer', {
+      markdown: creator.markdownContent,
+      brief,
+      revisedAfterIssues: false,
+    })) as ReviewReport;
+
+    if (config.reviewer === 'strict' && report.verdict !== 'pass') {
+      // Blockers first so the revision is guided by the most important
+      // problems, then the remaining nits.
+      const ordered = [
+        ...report.issues.filter((i) => i.severity === 'blocker'),
+        ...report.issues.filter((i) => i.severity !== 'blocker'),
+      ];
+      const guidance = ordered.map((i) => `- ${i.message} -> ${i.suggestedFix}`).join('\n');
+
+      onStage('creating', 'Applying reviewer feedback (revision 1 of 1)...');
+      creator = (await call('creator', {
+        seedTopic: refinedTopic,
+        targetWords: config.targetWords,
+        brief,
+        toneOverride: options.toneOverride ?? '',
+        extraInstructions: `A reviewer raised these problems. Fix them:\n${guidance}`,
+      })) as CreatorOutput;
+
+      onStage('reviewing', 'Re-auditing the revised draft...');
+      report = (await call('reviewer', {
+        markdown: creator.markdownContent,
+        brief,
+        revisedAfterIssues: true,
+      })) as ReviewReport;
+
+      needsAttention = report.verdict !== 'pass';
+    }
+  }
+
+  // After the creator stage a brief always exists (supplied or self-planned).
+  return {
+    ready: !needsAttention,
+    creator,
+    brief: brief as ImpowerOutput,
+    report,
+  };
+}
+
+/** Stage 5 (Designer fan-out) and article assembly. */
+async function runDesignerStage(
+  options: RunArticleOptions,
+  params: {
+    refinedTopic: string;
+    brief: ImpowerOutput;
+    creator: CreatorOutput;
+    report?: ReviewReport;
+    judge?: JudgeOutput;
+    articleId?: string;
+  }
+): Promise<GeneratedArticle> {
+  const { config, onStage } = options;
+  const call = makeCall(options);
+
+  onStage('designing', 'Rendering HTML formats...');
+  const targets = formatTargets(config.targetFormats, config.languages);
+
+  const rendered = await mapWithConcurrency(targets, DESIGNER_CONCURRENCY, async (target) => {
+    const output = await call('designer', {
+      markdown: params.creator.markdownContent,
+      language: target.language,
+      cssMode: target.cssMode,
+    });
+    return { id: target.id, html: output?.html ?? '', warnings: output?.warnings ?? [] };
+  });
+
+  const formatsBundle: Record<string, string> = {};
+  const allWarnings: BrandWarning[] = [];
+  for (const r of rendered) {
+    formatsBundle[r.id] = r.html;
+    allWarnings.push(...r.warnings);
+  }
+
+  return buildArticle({
+    options,
+    refinedTopic: params.refinedTopic,
+    brief: params.brief,
+    creator: params.creator,
+    formatsBundle,
+    warnings: allWarnings,
+    report: params.report,
+    reviewPassed:
+      config.reviewer === 'off' ? undefined : params.report?.verdict === 'pass',
+    judge: params.judge,
+    articleId: params.articleId,
+  });
+}
+
+function haltedResult(
+  options: RunArticleOptions,
+  params: {
+    refinedTopic: string;
+    brief: ImpowerOutput;
+    creator: CreatorOutput;
+    report: ReviewReport;
+    judge?: JudgeOutput;
+    articleId?: string;
+  }
+): RunArticleResult {
+  // The markdown is retained so the user can read, copy, or act on the draft.
+  return {
+    status: 'needs_attention',
+    reviewReport: params.report,
+    article: buildArticle({
+      options,
+      refinedTopic: params.refinedTopic,
+      brief: params.brief,
+      creator: params.creator,
+      formatsBundle: {},
+      warnings: [],
+      report: params.report,
+      reviewPassed: false,
+      judge: params.judge,
+      articleId: params.articleId,
+    }),
+  };
+}
+
+export async function runArticle(options: RunArticleOptions): Promise<RunArticleResult> {
+  const { config, onStage } = options;
+  const call = makeCall(options);
+  const seedTopic = options.seedTopic.trim();
 
   try {
     // ---- Stage 1: Judge -----------------------------------------------
@@ -108,115 +272,117 @@ export async function runArticle(options: RunArticleOptions): Promise<RunArticle
       })) as ImpowerOutput;
     }
 
-    // ---- Stage 3: Creator ---------------------------------------------
-    onStage('creating', 'Writing the article markdown...');
-    let creator = (await call('creator', {
-      seedTopic: refinedTopic,
-      targetWords: config.targetWords,
-      brief,
-      toneOverride: options.toneOverride ?? '',
-      extraInstructions: '',
-    })) as CreatorOutput;
+    // ---- Stage 3 + 4: Creator & Reviewer ------------------------------
+    const phase = await runCreatorAndReviewer(options, { refinedTopic, brief, judge });
 
-    if (!brief) brief = resolveBrief(creator, refinedTopic, options.focusKeyphrase ?? '');
-
-    // ---- Stage 4: Reviewer --------------------------------------------
-    let report: ReviewReport | undefined;
-    let needsAttention = false;
-
-    if (config.reviewer !== 'off') {
-      onStage(
-        'reviewing',
-        config.reviewer === 'advisory' ? 'Auditing (advisory)...' : 'Auditing...'
-      );
-      report = (await call('reviewer', {
-        markdown: creator.markdownContent,
-        brief,
-        revisedAfterIssues: false,
-      })) as ReviewReport;
-
-      if (config.reviewer === 'strict' && report.verdict !== 'pass') {
-        // Blockers first so the revision is guided by the most important
-        // problems, then the remaining nits.
-        const ordered = [
-          ...report.issues.filter((i) => i.severity === 'blocker'),
-          ...report.issues.filter((i) => i.severity !== 'blocker'),
-        ];
-        const guidance = ordered.map((i) => `- ${i.message} -> ${i.suggestedFix}`).join('\n');
-
-        onStage('creating', 'Applying reviewer feedback (revision 1 of 1)...');
-        creator = (await call('creator', {
-          seedTopic: refinedTopic,
-          targetWords: config.targetWords,
-          brief,
-          toneOverride: options.toneOverride ?? '',
-          extraInstructions: `A reviewer raised these problems. Fix them:\n${guidance}`,
-        })) as CreatorOutput;
-
-        onStage('reviewing', 'Re-auditing the revised draft...');
-        report = (await call('reviewer', {
-          markdown: creator.markdownContent,
-          brief,
-          revisedAfterIssues: true,
-        })) as ReviewReport;
-
-        needsAttention = report.verdict !== 'pass';
-      }
-    }
-
-    if (needsAttention) {
-      // The markdown is retained so the user can read and copy what was produced.
-      return {
-        status: 'needs_attention',
-        reviewReport: report,
-        article: buildArticle({
-          options,
-          refinedTopic,
-          brief,
-          creator,
-          formatsBundle: {},
-          warnings: [],
-          report,
-          reviewPassed: false,
-          judge,
-        }),
-      };
+    if (!phase.ready) {
+      return haltedResult(options, {
+        refinedTopic,
+        brief: phase.brief,
+        creator: phase.creator,
+        report: phase.report as ReviewReport,
+        judge,
+      });
     }
 
     // ---- Stage 5: Designer --------------------------------------------
-    onStage('designing', 'Rendering HTML formats...');
-    const targets = formatTargets(config.targetFormats, config.languages);
-
-    const rendered = await mapWithConcurrency(targets, DESIGNER_CONCURRENCY, async (target) => {
-      const output = await call('designer', {
-        markdown: creator.markdownContent,
-        language: target.language,
-        cssMode: target.cssMode,
-      });
-      return { id: target.id, html: output?.html ?? '', warnings: output?.warnings ?? [] };
-    });
-
-    const formatsBundle: Record<string, string> = {};
-    const allWarnings: BrandWarning[] = [];
-    for (const r of rendered) {
-      formatsBundle[r.id] = r.html;
-      allWarnings.push(...r.warnings);
-    }
-
-    const article = buildArticle({
-      options,
+    const article = await runDesignerStage(options, {
       refinedTopic,
-      brief,
-      creator,
-      formatsBundle,
-      warnings: allWarnings,
-      report,
-      reviewPassed: config.reviewer === 'off' ? undefined : report?.verdict === 'pass',
+      brief: phase.brief,
+      creator: phase.creator,
+      report: phase.report,
       judge,
     });
 
     onStage('done', 'Complete.');
-    return { status: 'done', article, reviewReport: report };
+    return { status: 'done', article, reviewReport: phase.report };
+  } catch (err) {
+    const aborted = err instanceof AgentError && err.aborted;
+    const message = aborted ? 'aborted' : err instanceof Error ? err.message : String(err);
+    onStage('failed', message);
+    return { status: 'failed', error: message };
+  }
+}
+
+export type ResumeAction = 'retry_creator' | 'skip_designer';
+
+/**
+ * Rebuild a working brief from a stored article. The stalled article keeps the
+ * resolved seoMetadata and secondary keywords, which is enough to re-guide the
+ * Creator and Reviewer on a resume.
+ */
+function briefFromArticle(article: GeneratedArticle): ImpowerOutput {
+  return {
+    seoMetadata: article.seoMetadata,
+    secondaryKeywords: article.secondaryKeywords
+      ? article.secondaryKeywords
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [],
+    outline: [],
+    faqPlan: [],
+    statPlan: [],
+    internalLinkTargets: [],
+    source: 'impower',
+  };
+}
+
+/**
+ * Resume an article that halted in the strict review gate. The retained Markdown
+ * and brief are reconstructed from the stored article so the resume can happen
+ * in a later session, not only right after the halt. The output keeps the same
+ * article id so it replaces the stalled record instead of duplicating it.
+ */
+export async function resumeArticle(
+  article: GeneratedArticle,
+  options: RunArticleOptions,
+  action: ResumeAction
+): Promise<RunArticleResult> {
+  const { onStage } = options;
+  const refinedTopic = article.topic;
+  const judge = article.judgeOutput;
+  const brief = briefFromArticle(article);
+
+  try {
+    if (action === 'skip_designer') {
+      const creator: CreatorOutput = { markdownContent: article.rawText ?? '' };
+      const built = await runDesignerStage(options, {
+        refinedTopic,
+        brief,
+        creator,
+        report: article.reviewReport,
+        judge,
+        articleId: article.id,
+      });
+      onStage('done', 'Complete.');
+      return { status: 'done', article: built, reviewReport: article.reviewReport };
+    }
+
+    // retry_creator: reset the gate by re-running the Creator + Reviewer cycle.
+    const phase = await runCreatorAndReviewer(options, { refinedTopic, brief, judge });
+
+    if (!phase.ready) {
+      return haltedResult(options, {
+        refinedTopic,
+        brief: phase.brief,
+        creator: phase.creator,
+        report: phase.report as ReviewReport,
+        judge,
+        articleId: article.id,
+      });
+    }
+
+    const built = await runDesignerStage(options, {
+      refinedTopic,
+      brief: phase.brief,
+      creator: phase.creator,
+      report: phase.report,
+      judge,
+      articleId: article.id,
+    });
+    onStage('done', 'Complete.');
+    return { status: 'done', article: built, reviewReport: phase.report };
   } catch (err) {
     const aborted = err instanceof AgentError && err.aborted;
     const message = aborted ? 'aborted' : err instanceof Error ? err.message : String(err);
@@ -235,6 +401,7 @@ interface BuildArticleParams {
   report?: ReviewReport;
   reviewPassed?: boolean;
   judge?: JudgeOutput;
+  articleId?: string;
 }
 
 function buildArticle(params: BuildArticleParams): GeneratedArticle {
@@ -258,7 +425,7 @@ function buildArticle(params: BuildArticleParams): GeneratedArticle {
     } as GeneratedArticle['seoMetadata']);
 
   return {
-    id: `art_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    id: params.articleId ?? `art_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     topic: refinedTopic,
     focusKeyphrase: metadata.focusKeyphrase || options.focusKeyphrase,
     secondaryKeywords: brief?.secondaryKeywords.join(', ') ?? '',
