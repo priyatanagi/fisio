@@ -1,4 +1,11 @@
 import { ProviderConfig } from './provider';
+import type {
+  PipelineConfig,
+  ReviewReport,
+  JudgeOutput,
+  BrandWarning,
+} from '../pipeline/stages';
+import type { UserProfile } from './profile';
 
 export type LanguageOption = 'en' | 'id' | 'es' | 'de' | 'fr';
 
@@ -59,6 +66,14 @@ export interface GeneratedArticle {
   generatedAt: string;
   rawText?: string;
   providerUsed?: string;
+  pipelineConfig?: PipelineConfig;
+  profileSnapshot?: UserProfile;
+  reviewReport?: ReviewReport;
+  judgeOutput?: JudgeOutput;
+  reviewPassed?: boolean;
+  brandWarnings?: BrandWarning[];
+  batchJobId?: string;
+  batchRowId?: string;
 }
 
 export interface GenerateArticlePayload {
