@@ -1,5 +1,7 @@
 # Fisio Architect 2.0
 
+![Fisio Architect — Generate view with the routed sidebar](docs/images/app-generate.png)
+
 A local-first, multi-agent **SEO article generator** for B2B commercial-fitness content. It
 turns a seed topic into publish-ready, brand-styled HTML through a configurable pipeline of LLM
 agents — Judge → Impower → Creator → Reviewer → Designer — with per-role provider routing, batch
