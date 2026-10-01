@@ -78,13 +78,19 @@ app.post('/api/test-provider', async (req, res) => {
     }
 
     if (provider === 'openai') {
-      let url = testConfig.baseUrl?.trim() || 'https://api.openai.com/v1';
-      url = url.replace(/\/+$/, '');
-      const modelsUrl = `${url}/models`;
-      
+      const apiKey = testConfig.apiKey?.trim() || process.env.OPENAI_API_KEY?.trim();
+      if (!apiKey) {
+        throw new Error('OPENAI_API_KEY is not configured in server environment or provider settings.');
+      }
+      const urlBase =
+        testConfig.baseUrl?.trim() ||
+        process.env.OPENAI_BASE_URL ||
+        'https://api.openai.com/v1';
+      const modelsUrl = `${urlBase.replace(/\/+$/, '')}/models`;
+
       const response = await fetch(modelsUrl, {
         headers: {
-          Authorization: `Bearer ${testConfig.apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
         }
       });
       

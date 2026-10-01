@@ -93,11 +93,20 @@ export async function callGemini(fullPrompt: string, config?: ProviderConfig): P
 }
 
 export async function callOpenAI(fullPrompt: string, config?: ProviderConfig): Promise<string> {
-  const apiKey = config?.apiKey?.trim();
-  if (!apiKey) throw new ProviderCallError('API key is required for OpenAI Compatible.', false);
+  const apiKey = config?.apiKey?.trim() || process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) {
+    throw new ProviderCallError(
+      'OPENAI_API_KEY is not configured in server environment or provider settings.',
+      false
+    );
+  }
 
-  const baseUrl = (config?.baseUrl?.trim() || 'https://api.openai.com/v1').replace(/\/+$/, '');
-  const model = config?.model?.trim() || 'gpt-4o';
+  const baseUrl = (
+    config?.baseUrl?.trim() ||
+    process.env.OPENAI_BASE_URL ||
+    'https://api.openai.com/v1'
+  ).replace(/\/+$/, '');
+  const model = config?.model?.trim() || process.env.OPENAI_MODEL || 'gpt-4o';
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -131,11 +140,20 @@ export async function callOpenAI(fullPrompt: string, config?: ProviderConfig): P
 }
 
 export async function callAnthropic(fullPrompt: string, config?: ProviderConfig): Promise<string> {
-  const apiKey = config?.apiKey?.trim();
-  if (!apiKey) throw new ProviderCallError('API key is required for Anthropic.', false);
+  const apiKey = config?.apiKey?.trim() || process.env.ANTHROPIC_API_KEY?.trim();
+  if (!apiKey) {
+    throw new ProviderCallError(
+      'ANTHROPIC_API_KEY is not configured in server environment or provider settings.',
+      false
+    );
+  }
 
-  const baseUrl = (config?.baseUrl?.trim() || 'https://api.anthropic.com/v1').replace(/\/+$/, '');
-  const model = config?.model?.trim() || 'claude-3-7-sonnet-20250219';
+  const baseUrl = (
+    config?.baseUrl?.trim() ||
+    process.env.ANTHROPIC_BASE_URL ||
+    'https://api.anthropic.com/v1'
+  ).replace(/\/+$/, '');
+  const model = config?.model?.trim() || process.env.ANTHROPIC_MODEL || 'claude-3-7-sonnet-20250219';
 
   const response = await fetch(`${baseUrl}/messages`, {
     method: 'POST',

@@ -22,6 +22,8 @@ const ROLES = Object.keys(ROLE_INFO) as AgentRole[];
 function keyPlaceholder(provider: ProviderType): string {
   if (provider === 'gemini') return 'Uses system GEMINI_API_KEY by default';
   if (provider === 'ollama') return 'Not required (local server)';
+  if (provider === 'openai') return 'Uses system OPENAI_API_KEY by default';
+  if (provider === 'anthropic') return 'Uses system ANTHROPIC_API_KEY by default';
   return 'Required';
 }
 
