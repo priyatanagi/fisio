@@ -1,4 +1,4 @@
-export type ProviderType = 'gemini' | 'openai' | 'anthropic';
+export type ProviderType = 'gemini' | 'openai' | 'anthropic' | 'ollama';
 export type AgentRole = 'judge' | 'impower' | 'creator' | 'reviewer' | 'designer';
 
 export interface ProviderConfig {
@@ -18,6 +18,7 @@ export const DEFAULT_PROVIDER_CONFIG: ProviderConfig = {
     gemini: { model: 'gemini-3.1-flash-lite', apiKey: '', baseUrl: '' },
     openai: { model: 'gpt-4o', apiKey: '', baseUrl: 'https://api.openai.com/v1' },
     anthropic: { model: 'claude-3-7-sonnet-20250219', apiKey: '', baseUrl: 'https://api.anthropic.com/v1' },
+    ollama: { model: 'gemma4:e4b', apiKey: '', baseUrl: 'http://localhost:11434' },
   },
 };
 
@@ -73,6 +74,16 @@ export const PROVIDER_PRESETS: Record<
       { id: 'claude-3-7-sonnet-20250219', name: 'Claude 3.7 Sonnet (Latest)' },
       { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet' },
       { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku (Fast)' },
+    ],
+  },
+  ollama: {
+    name: 'Ollama (Local)',
+    description: 'Free local inference via the Ollama native API. No API key required.',
+    defaultBaseUrl: 'http://localhost:11434',
+    defaultModel: 'gemma4:e4b',
+    models: [
+      { id: 'gemma4:e4b', name: 'gemma4:e4b (local)' },
+      { id: 'ornith:9b', name: 'ornith:9b (local)' },
     ],
   },
 };

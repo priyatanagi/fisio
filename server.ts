@@ -51,6 +51,32 @@ app.post('/api/test-provider', async (req, res) => {
     const { provider = 'gemini', model, apiKey, baseUrl } = req.body;
     const testConfig: ProviderConfig = { provider, model, apiKey, baseUrl };
 
+    if (provider === 'ollama') {
+      const url = (
+        testConfig.baseUrl?.trim() ||
+        process.env.OLLAMA_BASE_URL ||
+        'http://localhost:11434'
+      ).replace(/\/+$/, '');
+
+      const response = await fetch(`${url}/api/tags`);
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Ollama returned status ${response.status}: ${errText}`);
+      }
+
+      const data = await response.json();
+      const names: string[] = (data.models ?? []).map((m: any) => m.name);
+      const requested = testConfig.model?.trim();
+      const missing = requested && !names.includes(requested);
+
+      return res.json({
+        success: true,
+        message: missing
+          ? `Ollama is reachable at ${url}, but model "${requested}" is not pulled. Available: ${names.join(', ') || 'none'}.`
+          : `Successfully connected! Found ${names.length} local model(s): ${names.join(', ')}.`,
+      });
+    }
+
     if (provider === 'openai') {
       let url = testConfig.baseUrl?.trim() || 'https://api.openai.com/v1';
       url = url.replace(/\/+$/, '');

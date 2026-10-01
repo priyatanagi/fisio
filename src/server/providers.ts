@@ -167,9 +167,53 @@ export async function callAnthropic(fullPrompt: string, config?: ProviderConfig)
   return text;
 }
 
+export async function callOllama(fullPrompt: string, config?: ProviderConfig): Promise<string> {
+  const baseUrl = (
+    config?.baseUrl?.trim() ||
+    process.env.OLLAMA_BASE_URL ||
+    'http://localhost:11434'
+  ).replace(/\/+$/, '');
+  const model = config?.model?.trim() || process.env.OLLAMA_MODEL || 'gemma4:e4b';
+
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        system:
+          'You are an Expert B2B Commercial Fitness SEO Strategist and Web Developer. You MUST output ONLY valid raw JSON conforming strictly to the requested schema. Never output markdown codeblock ticks or preamble.',
+        prompt: fullPrompt,
+        stream: false,
+        format: 'json',
+        options: { temperature: 0.7 },
+      }),
+    });
+  } catch (err) {
+    throw new ProviderCallError(
+      `Ollama is not reachable at ${baseUrl}. Start it with "ollama serve" and pull a model (e.g. "ollama pull ${model}"). Underlying error: ${String((err as Error)?.message || err)}`,
+      false
+    );
+  }
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new ProviderCallError(
+      `Ollama endpoint returned ${response.status}: ${errText}`,
+      response.status === 429
+    );
+  }
+  const data = await response.json();
+  const text = data.response;
+  if (!text) throw new ProviderCallError('No content returned from Ollama provider.', true);
+  return text;
+}
+
 export async function callProvider(prompt: string, config: ProviderConfig): Promise<string> {
   if (config.provider === 'gemini') return callGemini(prompt, config);
   if (config.provider === 'openai') return callOpenAI(prompt, config);
   if (config.provider === 'anthropic') return callAnthropic(prompt, config);
+  if (config.provider === 'ollama') return callOllama(prompt, config);
   throw new ProviderCallError(`Unsupported provider: ${config.provider}`, false);
 }

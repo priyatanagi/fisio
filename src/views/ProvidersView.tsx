@@ -19,6 +19,12 @@ const ROLE_INFO: Record<AgentRole, { name: string; icon: React.ReactNode; desc: 
 
 const ROLES = Object.keys(ROLE_INFO) as AgentRole[];
 
+function keyPlaceholder(provider: ProviderType): string {
+  if (provider === 'gemini') return 'Uses system GEMINI_API_KEY by default';
+  if (provider === 'ollama') return 'Not required (local server)';
+  return 'Required';
+}
+
 export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, onSave }) => {
   const [activeRole, setActiveRole] = useState<AgentRole>('creator');
   const [draft, setDraft] = useState<MultiAgentConfig>(multiAgentConfig);
@@ -115,8 +121,8 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, 
             Configuring <span className="text-emerald-400">{ROLE_INFO[activeRole].name}</span>
           </h3>
 
-          <div className="grid grid-cols-3 gap-2">
-            {(['gemini', 'openai', 'anthropic'] as ProviderType[]).map((provider) => (
+          <div className="grid grid-cols-2 gap-2">
+            {(['gemini', 'openai', 'anthropic', 'ollama'] as ProviderType[]).map((provider) => (
               <button
                 key={provider}
                 onClick={() => changeProvider(provider)}
@@ -164,10 +170,9 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, 
               type="password"
               value={config.apiKey ?? ''}
               onChange={(e) => update({ apiKey: e.target.value })}
-              placeholder={
-                config.provider === 'gemini' ? 'Uses system GEMINI_API_KEY by default' : 'Required'
-              }
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-[11px] font-mono text-zinc-100 outline-none focus:border-zinc-500"
+              placeholder={keyPlaceholder(config.provider)}
+              disabled={config.provider === 'ollama'}
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-[11px] font-mono text-zinc-100 outline-none focus:border-zinc-500 disabled:opacity-50"
             />
           </label>
 
