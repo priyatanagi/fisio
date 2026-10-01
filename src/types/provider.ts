@@ -1,4 +1,5 @@
 export type ProviderType = 'gemini' | 'openai' | 'anthropic';
+export type AgentRole = 'judge' | 'impower' | 'creator' | 'reviewer' | 'designer';
 
 export interface ProviderConfig {
   provider: ProviderType;
@@ -18,6 +19,16 @@ export const DEFAULT_PROVIDER_CONFIG: ProviderConfig = {
     openai: { model: 'gpt-4o', apiKey: '', baseUrl: 'https://api.openai.com/v1' },
     anthropic: { model: 'claude-3-7-sonnet-20250219', apiKey: '', baseUrl: 'https://api.anthropic.com/v1' },
   },
+};
+
+export type MultiAgentConfig = Record<AgentRole, ProviderConfig>;
+
+export const DEFAULT_MULTI_AGENT_CONFIG: MultiAgentConfig = {
+  judge: { ...DEFAULT_PROVIDER_CONFIG },
+  impower: { ...DEFAULT_PROVIDER_CONFIG },
+  creator: { ...DEFAULT_PROVIDER_CONFIG },
+  reviewer: { ...DEFAULT_PROVIDER_CONFIG },
+  designer: { ...DEFAULT_PROVIDER_CONFIG },
 };
 
 export const PROVIDER_PRESETS: Record<
