@@ -39,20 +39,21 @@ import {
   Undo2,
 } from 'lucide-react';
 import { GeneratedArticle, OutputFormatId } from '../types/article';
-import { ProviderConfig } from '../types/provider';
+import type { UserProfile } from '../types/profile';
 import { copyToClipboard, downloadFile, downloadAllAsZip } from '../utils/exportUtils';
 import { ReadabilityScorecard } from './ReadabilityScorecard';
 import { SeoChecklistPanel } from './SeoChecklistPanel';
+import { HtmlPreviewPane } from './HtmlPreviewPane';
 import { isCleanHtmlIncomplete, synthesizeCleanHtml } from '../utils/cleanHtmlUtils';
 
-export type BottomTab = 'flesch' | 'checklist' | 'seo' | 'prompts';
+export type BottomTab = 'flesch' | 'checklist' | 'seo' | 'prompts' | 'preview';
 
 interface ArticleWorkspaceProps {
   article: GeneratedArticle;
   onUpdateArticle: (updated: GeneratedArticle) => void;
   activeFormat?: OutputFormatId;
   onSelectFormat?: (format: OutputFormatId) => void;
-  providerConfig?: ProviderConfig;
+  profile: UserProfile;
 }
 
 const FORMAT_OPTIONS: { id: OutputFormatId; name: string; lang: 'en' | 'id'; desc: string }[] = [
@@ -87,7 +88,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
   onUpdateArticle,
   activeFormat: controlledFormat,
   onSelectFormat,
-  providerConfig,
+  profile,
 }) => {
   // Active Format for Results panel
   const [internalFormat, setInternalFormat] = useState<OutputFormatId>('inline-en');
@@ -111,7 +112,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
   // AI Improve drawer & execution state
   const [showImproveDrawer, setShowImproveDrawer] = useState(false);
   const [improveInstruction, setImproveInstruction] = useState('');
-  const [isImproving, setIsImproving] = useState(false);
+  const [isImproving] = useState(false);
   const [improveError, setImproveError] = useState<string | null>(null);
   const [undoStack, setUndoStack] = useState<{ format: OutputFormatId; html: string }[]>([]);
 
@@ -299,46 +300,13 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
     }
   };
 
-  // AI Improve handler
-  const handleRunImprovement = async (instructionToUse?: string) => {
-    const prompt = instructionToUse || improveInstruction;
-    if (!prompt.trim() || isImproving) return;
-
-    setIsImproving(true);
-    setImproveError(null);
-
-    try {
-      const currentCode = getCurrentFormatContent();
-      const res = await fetch('/api/improve-article', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          htmlContent: currentCode,
-          instruction: prompt.trim(),
-          providerConfig,
-        }),
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || `Server responded with status ${res.status}`);
-      }
-
-      const data = await res.json();
-      if (data.improvedHtml) {
-        // Push to undo stack
-        setUndoStack((prev) => [{ format: selectedFormat, html: currentCode }, ...prev.slice(0, 5)]);
-        updateCurrentFormatContent(data.improvedHtml);
-        setShowImproveDrawer(false);
-        setImproveInstruction('');
-        showCopyFeedback('improved');
-      }
-    } catch (err: any) {
-      console.error('Improvement error:', err);
-      setImproveError(err.message || 'Failed to improve article with AI.');
-    } finally {
-      setIsImproving(false);
-    }
+  // AI Improve — the /api/improve-article route was removed in Task 7. Targeted
+  // edits now flow through the Reviewer revision loop, so this surfaces a notice
+  // instead of calling a dead endpoint.
+  const handleRunImprovement = (_instructionToUse?: string) => {
+    setImproveError(
+      'Targeted improvements are now applied by the Reviewer loop. Set Reviewer to Strict and regenerate, or edit the HTML directly in the Preview source view.'
+    );
   };
 
   // Undo last edit/improvement
@@ -1074,6 +1042,20 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
             <ImageIcon className="w-4 h-4 text-zinc-300" />
             <span>8K AI Image Prompts</span>
           </button>
+
+          {/* Tab 5: Brand-Token HTML Preview */}
+          <button
+            type="button"
+            onClick={() => setBottomTab('preview')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold transition-all shrink-0 ${
+              bottomTab === 'preview'
+                ? 'bg-zinc-800 text-zinc-100 shadow border border-zinc-700'
+                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
+            }`}
+          >
+            <Eye className="w-4 h-4 text-emerald-400" />
+            <span>Brand Preview</span>
+          </button>
         </div>
 
         {/* Tab Content Panel */}
@@ -1100,6 +1082,11 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
               metadata={article.seoMetadata}
               focusKeyphraseInput={article.focusKeyphrase}
             />
+          )}
+
+          {/* TAB: BRAND-TOKEN HTML PREVIEW */}
+          {bottomTab === 'preview' && (
+            <HtmlPreviewPane html={getCurrentFormatContent()} profile={profile} />
           )}
 
           {/* TAB 3: SEO WORDPRESS METADATA */}

@@ -138,7 +138,6 @@ export const GenerateView: React.FC<GenerateViewProps> = ({
           onUpdateArticle={onUpdateArticle}
           activeFormat={activeFormat}
           onSelectFormat={setActiveFormat}
-          providerConfig={multiAgentConfig.creator}
           profile={profile}
         />
       )}
