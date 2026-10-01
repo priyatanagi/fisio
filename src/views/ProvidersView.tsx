@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Check } from 'lucide-react';
 import { BrainCircuit, Search, Edit3, ClipboardCheck, Paintbrush } from 'lucide-react';
 import type { AgentRole, MultiAgentConfig, ProviderConfig, ProviderType } from '../types/provider';
@@ -27,16 +27,27 @@ function keyPlaceholder(provider: ProviderType): string {
 
 export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, onSave }) => {
   const [activeRole, setActiveRole] = useState<AgentRole>('creator');
-  const [draft, setDraft] = useState<MultiAgentConfig>(multiAgentConfig);
   const [saved, setSaved] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const config = draft[activeRole];
+  // The saved config is the single source of truth: every edit persists through
+  // onSave and flows straight back as the `multiAgentConfig` prop, so there is
+  // no unsaved draft to lose when navigating away.
+  const config = multiAgentConfig[activeRole];
   const preset = PRESETS[config.provider];
 
-  const update = (patch: Partial<ProviderConfig>) =>
-    setDraft((prev) => ({ ...prev, [activeRole]: { ...prev[activeRole], ...patch } }));
+  const flashSaved = () => {
+    setSaved(true);
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+    savedTimer.current = setTimeout(() => setSaved(false), 1200);
+  };
+
+  const update = (patch: Partial<ProviderConfig>) => {
+    onSave({ ...multiAgentConfig, [activeRole]: { ...multiAgentConfig[activeRole], ...patch } });
+    flashSaved();
+  };
 
   const changeProvider = (provider: ProviderType) => {
     const savedFor = config.savedConfigs?.[provider];
@@ -77,12 +88,6 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, 
     }
   };
 
-  const save = () => {
-    onSave(draft);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1000);
-  };
-
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto">
       <div className="flex gap-6">
@@ -109,7 +114,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, 
                   {ROLE_INFO[role].desc}
                 </span>
                 <span className="inline-block mt-1.5 px-1.5 py-0.5 bg-zinc-950/50 rounded font-mono border border-zinc-800 text-[9px]">
-                  {draft[role].provider.toUpperCase()}
+                  {multiAgentConfig[role].provider.toUpperCase()}
                 </span>
               </span>
             </button>
@@ -197,22 +202,17 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, 
         </div>
       </div>
 
-      <div className="mt-4 flex items-center gap-3">
-        <button
-          onClick={save}
-          className="px-4 py-2 rounded-lg bg-zinc-100 text-zinc-950 hover:bg-white text-xs font-semibold flex items-center gap-1.5"
+      <div className="mt-4 flex items-center gap-2">
+        <span
+          className={`flex items-center gap-1.5 text-xs font-semibold transition-opacity ${
+            saved ? 'text-emerald-400 opacity-100' : 'text-zinc-500 opacity-70'
+          }`}
         >
-          {saved ? (
-            <>
-              <Check className="w-3.5 h-3.5 text-emerald-600" />
-              Saved
-            </>
-          ) : (
-            'Apply All'
-          )}
-        </button>
-        <span className="text-[10px] font-mono text-zinc-500">
-          Applies to all five roles
+          <Check className="w-3.5 h-3.5" />
+          {saved ? 'Saved' : 'Auto-saves as you edit'}
+        </span>
+        <span className="text-[10px] font-mono text-zinc-600">
+          Each field is stored per role immediately — no Apply step.
         </span>
       </div>
     </div>
