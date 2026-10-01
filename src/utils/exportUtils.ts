@@ -38,90 +38,153 @@ export function downloadFile(filename: string, content: string, mimeType: string
   URL.revokeObjectURL(url);
 }
 
-export async function downloadAllAsZip(article: GeneratedArticle) {
-  const zip = new JSZip();
-  const slug = article.seoMetadata.urlSlug || 'commercial-fitness-article';
+export interface ArticleFile {
+  name: string;
+  content: string;
+}
 
-  // 1. All available formats in formats bundle
-  if (article.formats['inline-en']) {
-    zip.file(`${slug}-inline-en.html`, article.formats['inline-en']);
+export function buildArticleFolder(article: GeneratedArticle): ArticleFile[] {
+  const slug = article.seoMetadata?.urlSlug || 'article';
+  const files: ArticleFile[] = [];
+
+  const inlineEn = article.formats?.['inline-en'] || article.inlineCssHtml;
+  const inlineId = article.formats?.['inline-id'];
+  const cleanEn = article.formats?.['clean-en'] || article.cleanHtml;
+  const cleanId = article.formats?.['clean-id'];
+
+  if (inlineEn) files.push({ name: `${slug}-inline-en.html`, content: inlineEn });
+  if (inlineId) files.push({ name: `${slug}-inline-id.html`, content: inlineId });
+
+  if (cleanEn) {
+    files.push({
+      name: `${slug}-clean-en.html`,
+      content: isCleanHtmlIncomplete(cleanEn)
+        ? synthesizeCleanHtml(inlineEn, cleanEn, article.topic)
+        : cleanEn,
+    });
   }
-  if (article.formats['inline-id']) {
-    zip.file(`${slug}-inline-id.html`, article.formats['inline-id']);
+  if (cleanId) {
+    files.push({
+      name: `${slug}-clean-id.html`,
+      content: isCleanHtmlIncomplete(cleanId)
+        ? synthesizeCleanHtml(inlineId || inlineEn, cleanId, article.topic)
+        : cleanId,
+    });
   }
 
-  // Ensure clean HTML files are completely filled with real content
-  const cleanEnContent = article.formats['clean-en'] || article.cleanHtml;
-  if (cleanEnContent) {
-    const finalCleanEn = isCleanHtmlIncomplete(cleanEnContent)
-      ? synthesizeCleanHtml(article.formats['inline-en'] || article.inlineCssHtml, cleanEnContent, article.topic)
-      : cleanEnContent;
-    zip.file(`${slug}-clean-en.html`, finalCleanEn);
-  }
-
-  const cleanIdContent = article.formats['clean-id'];
-  if (cleanIdContent) {
-    const finalCleanId = isCleanHtmlIncomplete(cleanIdContent)
-      ? synthesizeCleanHtml(article.formats['inline-id'] || article.inlineCssHtml, cleanIdContent, article.topic)
-      : cleanIdContent;
-    zip.file(`${slug}-clean-id.html`, finalCleanId);
-  }
-
-  // 2. SEO Metadata
   if (article.seoMetadataEn) {
-    zip.file(`${slug}-seo-metadata-en.json`, JSON.stringify(article.seoMetadataEn, null, 2));
+    files.push({
+      name: `${slug}-seo-metadata-en.json`,
+      content: JSON.stringify(article.seoMetadataEn, null, 2),
+    });
   }
   if (article.seoMetadataId) {
-    zip.file(`${slug}-seo-metadata-id.json`, JSON.stringify(article.seoMetadataId, null, 2));
+    files.push({
+      name: `${slug}-seo-metadata-id.json`,
+      content: JSON.stringify(article.seoMetadataId, null, 2),
+    });
   }
   if (!article.seoMetadataEn && !article.seoMetadataId) {
-    zip.file(`${slug}-seo-metadata.json`, JSON.stringify(article.seoMetadata, null, 2));
+    files.push({
+      name: `${slug}-seo-metadata.json`,
+      content: JSON.stringify(article.seoMetadata, null, 2),
+    });
   }
 
-  const metadataText = `=========================================
-SEO WORDPRESS METADATA
-=========================================
-SEO Title       : ${article.seoMetadata.seoTitle}
-Headline        : ${article.seoMetadata.headline}
-Focus Keyphrase : ${article.focusKeyphrase || article.seoMetadata.focusKeyphrase}
-Meta Description: ${article.seoMetadata.metaDescription}
-URL Slug        : ${article.seoMetadata.urlSlug}
-Tags            : ${article.seoMetadata.tags.join(', ')}
+  files.push({ name: `${slug}-seo-metadata.txt`, content: buildMetadataSummary(article) });
 
-=========================================
-ARTICLE PERFORMANCE METRICS
-=========================================
-Target Words    : ${article.targetWordCount}
-Actual Words    : ${article.metrics.wordCount}
-Reading Time    : ~${article.metrics.readingTimeMinutes} mins
-Flesch Score    : ${article.metrics.fleschScore}
-Generated Date  : ${new Date(article.generatedAt).toLocaleString()}
-Active Formats  : ${Object.keys(article.formats).join(', ') || 'inline-css, clean-html'}
-`;
-  zip.file(`${slug}-seo-metadata.txt`, metadataText);
+  if (article.rawText) {
+    files.push({ name: `${slug}.md`, content: article.rawText });
+  }
 
-  // 3. AI Image Generation Prompts
-  let promptsText = `=========================================
-AI IMAGE GENERATOR PROMPTS (8K HYPER-REALISTIC)
-=========================================
-Target Article: ${article.seoMetadata.headline}
+  if (article.reviewReport) {
+    files.push({
+      name: `${slug}-review-report.json`,
+      content: JSON.stringify(article.reviewReport, null, 2),
+    });
+  }
 
-`;
-  article.imagePrompts.forEach((item, index) => {
-    promptsText += `${index + 1}. ${item.label.toUpperCase()} (Aspect Ratio --ar ${item.aspectRatio})
-   - Concept: ${item.concept}
-   - Prompt Midjourney / FLUX / GPT:
-     "${item.prompt}"\n\n`;
+  if (article.imagePrompts?.length) {
+    const lines = [
+      '=========================================',
+      'AI IMAGE GENERATOR PROMPTS (8K HYPER-REALISTIC)',
+      '=========================================',
+      `Target Article: ${article.seoMetadata?.headline ?? article.topic}`,
+      '',
+    ];
+    article.imagePrompts.forEach((item, index) => {
+      lines.push(
+        `${index + 1}. ${item.label.toUpperCase()} (Aspect Ratio --ar ${item.aspectRatio})`
+      );
+      lines.push(`   - Concept: ${item.concept}`);
+      lines.push(`   - Prompt Midjourney / FLUX / GPT:`);
+      lines.push(`   "${item.prompt}"`, '');
+    });
+    files.push({ name: `${slug}-ai-image-prompts.txt`, content: lines.join('\n') });
+  }
+
+  return files;
+}
+
+function buildMetadataSummary(article: GeneratedArticle): string {
+  const meta = article.seoMetadata;
+  return [
+    '=========================================',
+    'SEO WORDPRESS METADATA',
+    '=========================================',
+    `SEO Title       : ${meta?.seoTitle ?? ''}`,
+    `Headline        : ${meta?.headline ?? ''}`,
+    `Focus Keyphrase : ${article.focusKeyphrase || meta?.focusKeyphrase || ''}`,
+    `Meta Description: ${meta?.metaDescription ?? ''}`,
+    `URL Slug        : ${meta?.urlSlug ?? ''}`,
+    `Tags            : ${(meta?.tags ?? []).join(', ')}`,
+    '',
+    '=========================================',
+    'ARTICLE PERFORMANCE METRICS',
+    '=========================================',
+    `Target Words    : ${article.targetWordCount}`,
+    `Actual Words    : ${article.metrics?.wordCount ?? 0}`,
+    `Reading Time    : ~${article.metrics?.readingTimeMinutes ?? 0} mins`,
+    `Flesch Score    : ${article.metrics?.fleschScore ?? 0}`,
+    `Generated Date  : ${new Date(article.generatedAt).toLocaleString()}`,
+    `Active Formats  : ${Object.keys(article.formats ?? {}).join(', ') || 'none'}`,
+    article.reviewReport
+      ? `Review Verdict  : ${article.reviewReport.verdict} (score ${article.reviewReport.seoScore})`
+      : 'Review Verdict  : not reviewed',
+    '',
+  ].join('\n');
+}
+
+export async function downloadAllAsZip(article: GeneratedArticle): Promise<void> {
+  const zip = new JSZip();
+  for (const file of buildArticleFolder(article)) {
+    zip.file(file.name, file.content);
+  }
+  const slug = article.seoMetadata?.urlSlug || 'article';
+  const blob = await zip.generateAsync({ type: 'blob' });
+  triggerDownload(blob, `${slug}-package.zip`);
+}
+
+export async function downloadBatchAsZip(articles: GeneratedArticle[]): Promise<void> {
+  const zip = new JSZip();
+  articles.forEach((article, index) => {
+    const slug = article.seoMetadata?.urlSlug || `article-${index + 1}`;
+    const folder = zip.folder(slug) ?? zip;
+    for (const file of buildArticleFolder(article)) {
+      folder.file(file.name, file.content);
+    }
   });
-  zip.file(`${slug}-ai-image-prompts.txt`, promptsText);
+  const blob = await zip.generateAsync({ type: 'blob' });
+  triggerDownload(blob, `fisio-batch-${articles.length}-articles.zip`);
+}
 
-  const content = await zip.generateAsync({ type: 'blob' });
-  const url = URL.createObjectURL(content);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${slug}-4formats-complete-package.zip`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+function triggerDownload(blob: Blob, fileName: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
   URL.revokeObjectURL(url);
 }
