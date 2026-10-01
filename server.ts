@@ -467,7 +467,7 @@ ${markdown}
     };
 
     const processLanguage = async (langCode: 'en' | 'id') => {
-      console.log(\`Generating Master Markdown for \${langCode}...\`);
+      console.log(`Generating Master Markdown for ${langCode}...`);
       const masterRaw = await callProvider(buildMasterPrompt(langCode));
       const masterData = JSON.parse(cleanJsonOutput(masterRaw));
       
@@ -475,16 +475,16 @@ ${markdown}
       let cleanHtml = '';
       let inlineCssHtml = '';
       
-      if (targetFormats.includes(\`clean-\${langCode}\`)) {
-        console.log(\`Converting to Clean HTML for \${langCode}...\`);
+      if (targetFormats.includes(`clean-${langCode}`)) {
+        console.log(`Converting to Clean HTML for ${langCode}...`);
         formatPromises.push(
           callProvider(buildFormatPrompt(masterData.markdownContent, 'clean', langCode))
             .then(raw => { cleanHtml = JSON.parse(cleanJsonOutput(raw)).cleanHtml || ''; })
         );
       }
       
-      if (targetFormats.includes(\`inline-\${langCode}\`)) {
-        console.log(\`Converting to Inline CSS HTML for \${langCode}...\`);
+      if (targetFormats.includes(`inline-${langCode}`)) {
+        console.log(`Converting to Inline CSS HTML for ${langCode}...`);
         formatPromises.push(
           callProvider(buildFormatPrompt(masterData.markdownContent, 'inline', langCode))
             .then(raw => { inlineCssHtml = JSON.parse(cleanJsonOutput(raw)).inlineCssHtml || ''; })
