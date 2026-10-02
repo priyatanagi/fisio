@@ -1,4 +1,5 @@
-import { SeoMetadata } from '../types/article';
+import { extractDocument, type ArticleDocument } from './document';
+import type { SeoMetadata } from '../types/article';
 
 export interface SeoCheckItem {
   id: string;
@@ -19,137 +20,96 @@ export interface SeoChecklistReport {
   keyphraseOccurrences: number;
 }
 
-export function evaluateSeoChecklist(
-  htmlContent: string,
+const UNAVAILABLE_WITHOUT_HTML = 'This check is not available until the HTML is rendered';
+
+function keyphraseOccurrences(text: string, keyphrase: string): number {
+  if (!keyphrase) return 0;
+  const escaped = keyphrase.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+  return (text.match(new RegExp(`\\b${escaped}\\b`, 'gi')) ?? []).length;
+}
+
+function densityPercent(occurrences: number, keyphrase: string, totalWords: number): number {
+  const words = Math.max(1, keyphrase.split(/\s+/).filter(Boolean).length);
+  return Math.round(((occurrences * words) / totalWords) * 1000) / 10;
+}
+
+/**
+ * Headings and paragraphs arrive as two independent lists with no link between them, so each
+ * entry is matched into `doc.text` in order to recover where it sat. -1 means "not found",
+ * which every caller treats as "belongs to no section".
+ */
+function positionsInText(doc: ArticleDocument, entries: string[]): number[] {
+  const positions: number[] = [];
+  let cursor = 0;
+  for (const entry of entries) {
+    const at = entry ? doc.text.indexOf(entry, cursor) : -1;
+    positions.push(at);
+    if (at >= 0) cursor = at + entry.length;
+  }
+  return positions;
+}
+
+/** Paragraph counts owned by each H2, bounded by the next heading of any level. */
+function paragraphsPerH2(doc: ArticleDocument): number[] {
+  const headingPositions = positionsInText(
+    doc,
+    doc.headings.map((h) => h.text)
+  );
+  const paragraphPositions = positionsInText(doc, doc.paragraphs);
+  const counts: number[] = [];
+
+  doc.headings.forEach((heading, i) => {
+    if (heading.level !== 2) return;
+    const start = headingPositions[i];
+    const end = i + 1 < headingPositions.length ? headingPositions[i + 1] : doc.text.length;
+    counts.push(
+      start < 0 ? 0 : paragraphPositions.filter((p) => p > start && p < end).length
+    );
+  });
+
+  return counts;
+}
+
+export function evaluateDraftChecks(
+  doc: ArticleDocument,
   metadata: SeoMetadata,
-  focusKeyphraseInput?: string
-): SeoChecklistReport {
-  const keyphrase = (focusKeyphraseInput || metadata.focusKeyphrase || '').trim();
+  focusKeyphrase?: string
+): SeoCheckItem[] {
+  const keyphrase = (focusKeyphrase || metadata.focusKeyphrase || '').trim();
   const lowerKeyphrase = keyphrase.toLowerCase();
-  const lowerHtml = (htmlContent || '').toLowerCase();
+  const totalWords = Math.max(1, doc.text.split(/\s+/).filter(Boolean).length);
+  const occurrences = keyphraseOccurrences(doc.text, lowerKeyphrase);
+  const density = densityPercent(occurrences, lowerKeyphrase, totalWords);
 
-  // Extract clean text from HTML
-  const rawText = htmlContent
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
-    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const seoTitle = metadata.seoTitle ?? '';
+  const metaDescription = metadata.metaDescription ?? '';
+  const headline = metadata.headline ?? '';
+  const titleLen = seoTitle.length;
+  const descLen = metaDescription.length;
 
-  const totalWords = Math.max(1, rawText.split(/\s+/).filter(Boolean).length);
+  const firstParagraph = (doc.paragraphs[0] ?? '').toLowerCase();
+  const headingText = doc.headings
+    .filter((h) => h.level === 2 || h.level === 3)
+    .map((h) => h.text.toLowerCase())
+    .join(' ');
+  const h1Count = doc.headings.filter((h) => h.level === 1).length;
+  const h2Count = doc.headings.filter((h) => h.level === 2).length;
 
-  // Keyphrase density
-  let occurrences = 0;
-  if (lowerKeyphrase) {
-    const escaped = lowerKeyphrase.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
-    const regex = new RegExp(`\\b${escaped}\\b`, 'gi');
-    const matches = rawText.match(regex);
-    occurrences = matches ? matches.length : 0;
-  }
-  const keyphraseWords = Math.max(1, keyphrase.split(/\s+/).length);
-  const densityPercent = Math.round(((occurrences * keyphraseWords) / totalWords) * 1000) / 10;
+  const h2Counts = paragraphsPerH2(doc);
+  const allH2HaveMultipleP = h2Counts.length > 0 && h2Counts.every((count) => count >= 2);
 
-  // 1. Post Title Length (<= 55 chars)
-  const titleLen = metadata.seoTitle ? metadata.seoTitle.length : 0;
-  const isTitleLenValid = titleLen > 0 && titleLen <= 55;
-
-  // 2. Post Title has Keyphrase
-  const isTitleHasKeyphrase = Boolean(
-    lowerKeyphrase && metadata.seoTitle && metadata.seoTitle.toLowerCase().includes(lowerKeyphrase)
+  const hasShallowParagraph = doc.paragraphs.some(
+    (p) => p.split(/(?<=[.!?])\s+/).filter((s) => s.length > 10).length < 2
   );
+  const hasWellFormedParagraphs = doc.paragraphs.length >= 4 && !hasShallowParagraph;
 
-  // 3. Headline Present
-  const hasHeadline = Boolean(metadata.headline && metadata.headline.trim().length > 10);
-
-  // 4. Meta Description Length (<= 155 chars)
-  const descLen = metadata.metaDescription ? metadata.metaDescription.length : 0;
-  const isDescLenValid = descLen >= 70 && descLen <= 155;
-
-  // 5. Meta Description has Keyphrase
-  const isDescHasKeyphrase = Boolean(
-    lowerKeyphrase && metadata.metaDescription && metadata.metaDescription.toLowerCase().includes(lowerKeyphrase)
-  );
-
-  // 6. Focus Keyphrase Length (<= 20 chars)
-  const isKeyphraseLenValid = keyphrase.length > 0 && keyphrase.length <= 25;
-
-  // 7. Keyphrase in Paragraph 1
-  const firstParagraphMatch = htmlContent.match(/<p\b[^>]*>(.*?)<\/p>/i);
-  const firstParagraphText = firstParagraphMatch ? firstParagraphMatch[1].replace(/<[^>]+>/g, '').toLowerCase() : '';
-  const isKeyphraseInP1 = Boolean(lowerKeyphrase && firstParagraphText.includes(lowerKeyphrase));
-
-  // 8. Keyphrase in Headings (H2 or H3)
-  const headingMatches = htmlContent.match(/<h[23]\b[^>]*>(.*?)<\/h[23]>/gi) || [];
-  const headingText = headingMatches.map((h) => h.replace(/<[^>]+>/g, '').toLowerCase()).join(' ');
-  const isKeyphraseInHeadings = Boolean(lowerKeyphrase && headingText.includes(lowerKeyphrase));
-
-  // 9. Keyphrase density (0.4% - 2.5%)
-  const isDensityOptimal = occurrences >= 2 && densityPercent >= 0.4 && densityPercent <= 2.5;
-
-  // 10. NO H1 in body
-  const hasH1Tag = /<h1\b/i.test(htmlContent);
-  const isNoH1Compliant = !hasH1Tag;
-
-  // 11. Heading Structure (has H2s)
-  const h2Count = (htmlContent.match(/<h2\b/gi) || []).length;
-  const isHeadingStructureValid = h2Count >= 2;
-
-  // 12. H2 Paragraph Rule (every H2 has at least 2 paragraphs)
-  // Split content by H2 and check paragraph counts
-  const h2Sections = htmlContent.split(/<h2\b/i).slice(1);
-  let allH2HaveMultipleP = h2Sections.length > 0;
-  for (const sec of h2Sections) {
-    const pCount = (sec.match(/<p\b/gi) || []).length;
-    if (pCount < 2) {
-      allH2HaveMultipleP = false;
-      break;
-    }
-  }
-
-  // 13. Paragraph Sentences Rule (each paragraph >= 3 sentences)
-  const allParagraphs = Array.from(htmlContent.matchAll(/<p\b[^>]*>(.*?)<\/p>/gi)).map((m) =>
-    m[1].replace(/<[^>]+>/g, ' ').trim()
-  );
-  let singleSentenceFound = false;
-  if (allParagraphs.length > 0) {
-    for (const p of allParagraphs) {
-      const sentenceCount = p.split(/(?<=[.!?])\s+/).filter((s) => s.length > 10).length;
-      if (sentenceCount < 2) {
-        singleSentenceFound = true;
-        break;
-      }
-    }
-  }
-  const isParagraphRuleCompliant = allParagraphs.length >= 4 && !singleSentenceFound;
-
-  // 14. Statistical Data (E-E-A-T)
-  const hasStrongTag = /<strong>.*?[\d%]+.*?<\/strong>/i.test(htmlContent);
-  const hasCalloutBox = /<aside\b/i.test(htmlContent);
-  const isStatsCompliant = hasStrongTag || hasCalloutBox;
-
-  // 15. Native Images
-  const imgMatches = htmlContent.match(/<img\b[^>]*>/gi) || [];
-  const hasValidImages =
-    imgMatches.length >= 2 &&
-    imgMatches.every((img) => /src=/i.test(img) && /alt=/i.test(img));
-
-  // 16. Contextual Links
-  const linkMatches = htmlContent.match(/<a\b[^>]*href=/gi) || [];
-  const isLinksCompliant = linkMatches.length >= 2;
-
-  // 17. FAQ Schema & Interactive FAQ
-  const hasDetailsTag = /<details\b/i.test(htmlContent);
-  const hasFaqClass = /faq|accordion|question/i.test(htmlContent);
-  const hasJsonLd = /application\/ld\+json/i.test(htmlContent);
-  const isFaqCompliant = hasDetailsTag || hasFaqClass || hasJsonLd;
-
-  const items: SeoCheckItem[] = [
+  return [
     {
       id: 'seo_title_length',
       category: 'metadata',
       title: 'SEO Title Length (≤ 55 chars)',
       description: 'Prevents title truncation in Google SERP snippet previews.',
-      passed: isTitleLenValid,
+      passed: titleLen > 0 && titleLen <= 55,
       value: `${titleLen}/55 characters`,
       recommendation: titleLen > 55 ? 'Shorten SEO Title to under 55 characters' : undefined,
     },
@@ -157,86 +117,99 @@ export function evaluateSeoChecklist(
       id: 'seo_title_keyphrase',
       category: 'metadata',
       title: 'Focus Keyphrase in SEO Title',
-      description: 'Crucial for immediate search intent match in Google search results.',
-      passed: isTitleHasKeyphrase,
-      value: `Keyphrase: "${keyphrase}"`,
-      recommendation: !isTitleHasKeyphrase ? `Insert "${keyphrase}" near the start of the SEO Title` : undefined,
+      description: 'The primary phrase must appear in the search snippet title.',
+      passed: Boolean(lowerKeyphrase && seoTitle.toLowerCase().includes(lowerKeyphrase)),
+      value: lowerKeyphrase || 'no keyphrase set',
+      recommendation: lowerKeyphrase && !seoTitle.toLowerCase().includes(lowerKeyphrase)
+        ? `Insert "${keyphrase}" near the start of the SEO Title`
+        : undefined,
     },
     {
       id: 'headline_present',
       category: 'metadata',
-      title: 'Click-Magnet Headline',
-      description: 'High-converting title for social sharing and WordPress hero header.',
-      passed: hasHeadline,
-      value: metadata.headline ? `${metadata.headline.slice(0, 35)}...` : 'Missing',
+      title: 'Headline Present',
+      description: 'A click-magnet headline is required for the article header.',
+      passed: Boolean(headline.trim().length > 10),
+      value: headline || 'missing',
     },
     {
       id: 'meta_desc_length',
       category: 'metadata',
-      title: 'Meta Description Length (≤ 155 chars)',
-      description: 'Optimal snippet display without ellipsis on desktop and mobile SERPs.',
-      passed: isDescLenValid,
+      title: 'Meta Description Length (70-155 chars)',
+      description: 'Keeps the SERP description within the display limit.',
+      passed: descLen >= 70 && descLen <= 155,
       value: `${descLen}/155 characters`,
-      recommendation: descLen > 155 ? 'Reduce to under 155 chars' : descLen < 70 ? 'Expand to at least 100 chars' : undefined,
+      recommendation: descLen > 155
+        ? 'Shorten the meta description'
+        : descLen < 70
+          ? 'Lengthen the meta description'
+          : undefined,
     },
     {
       id: 'meta_desc_keyphrase',
       category: 'metadata',
       title: 'Focus Keyphrase in Meta Description',
-      description: 'Google bolds matching search terms in the snippet description.',
-      passed: isDescHasKeyphrase,
-      value: isDescHasKeyphrase ? 'Present' : 'Not found in meta description',
+      description: 'The primary phrase must appear in the meta description.',
+      passed: Boolean(lowerKeyphrase && metaDescription.toLowerCase().includes(lowerKeyphrase)),
+      value: lowerKeyphrase || 'no keyphrase set',
     },
     {
       id: 'focus_keyphrase_length',
       category: 'metadata',
-      title: 'Focus Keyphrase Length (≤ 20–25 chars)',
-      description: 'Maintains focused semantic targeting without diluting keyphrase density.',
-      passed: isKeyphraseLenValid,
-      value: `${keyphrase.length} characters`,
+      title: 'Focus Keyphrase Length (≤ 25 chars)',
+      description: 'Overly long keyphrases never match real queries.',
+      passed: keyphrase.length > 0 && keyphrase.length <= 25,
+      value: `${keyphrase.length}/25 characters`,
     },
     {
       id: 'keyphrase_in_p1',
       category: 'content',
-      title: 'Focus Keyphrase in 1st Paragraph',
-      description: 'Confirms immediate topic relevance for search crawlers in the opening hook.',
-      passed: isKeyphraseInP1,
-      value: isKeyphraseInP1 ? 'Found in Introduction' : 'Missing in Paragraph 1',
-      recommendation: !isKeyphraseInP1 ? 'Include your focus keyphrase in the very first paragraph' : undefined,
+      title: 'Keyphrase in First Paragraph',
+      description: 'The opening paragraph must name the topic explicitly.',
+      passed: Boolean(lowerKeyphrase && firstParagraph.includes(lowerKeyphrase)),
+      value: firstParagraph ? firstParagraph.slice(0, 60) : 'no paragraph',
+      recommendation:
+        lowerKeyphrase && !firstParagraph.includes(lowerKeyphrase)
+          ? 'Include your focus keyphrase in the very first paragraph'
+          : undefined,
     },
     {
       id: 'keyphrase_in_headings',
       category: 'content',
-      title: 'Focus Keyphrase in H2 or H3 Headings',
-      description: 'Reinforces topic relevance across major content sections.',
-      passed: isKeyphraseInHeadings,
-      value: isKeyphraseInHeadings ? 'Present in Headings' : 'Missing in H2/H3',
+      title: 'Keyphrase in H2/H3 Headings',
+      description: 'Subheadings reinforce topical relevance.',
+      passed: Boolean(lowerKeyphrase && headingText.includes(lowerKeyphrase)),
+      value: headingText ? headingText.slice(0, 60) : 'no headings',
     },
     {
       id: 'keyphrase_density',
       category: 'content',
-      title: 'Keyphrase Density (0.5% – 2.0%)',
-      description: 'Balanced usage avoids both keyword stuffing penalties and under-optimization.',
-      passed: isDensityOptimal,
-      value: `${densityPercent}% (${occurrences} occurrences)`,
-      recommendation: densityPercent < 0.4 ? 'Mention keyphrase 1–2 more times' : densityPercent > 2.5 ? 'Reduce keyphrase repetition' : undefined,
+      title: 'Keyphrase Density (0.4% - 2.5%)',
+      description: 'Enough repetition to rank, not enough to read as spam.',
+      passed: occurrences >= 2 && density >= 0.4 && density <= 2.5,
+      value: `${density}% across ${totalWords} words`,
+      recommendation: density < 0.4
+        ? 'Mention the keyphrase 1–2 more times'
+        : density > 2.5
+          ? 'Reduce keyphrase repetition'
+          : undefined,
     },
     {
       id: 'no_h1_in_body',
       category: 'structure',
-      title: 'Strictly No <h1> in Article Body',
-      description: 'Prevents duplicate H1 SEO penalty since WordPress theme generates H1.',
-      passed: isNoH1Compliant,
-      value: isNoH1Compliant ? 'Passed (H2/H3 only)' : 'Contains illegal <h1> tag!',
-      recommendation: !isNoH1Compliant ? 'Change <h1> tags to <h2> to avoid duplicate H1 penalties' : undefined,
+      title: 'No H1 in Article Body',
+      description: 'The CMS supplies the H1; the body must not duplicate it.',
+      passed: h1Count === 0,
+      value: `${h1Count} H1 heading(s) in the body`,
+      recommendation: h1Count > 0 ? 'Change H1 headings to H2 to avoid duplicate H1 penalties' : undefined,
     },
     {
       id: 'heading_structure',
       category: 'structure',
-      title: 'Logical Heading Structure (≥ 2 H2 sections)',
-      description: 'Breaks down article into clear, skimmable themes.',
-      passed: isHeadingStructureValid,
-      value: `${h2Count} H2 sections`,
+      title: 'Heading Structure (≥ 2 H2s)',
+      description: 'Subheadings break the article into scannable sections.',
+      passed: h2Count >= 2,
+      value: `${h2Count} H2 heading(s)`,
     },
     {
       id: 'h2_paragraph_rule',
@@ -244,59 +217,91 @@ export function evaluateSeoChecklist(
       title: 'H2 Paragraph Depth (≥ 2 paragraphs per H2)',
       description: 'Ensures each subtopic has substantive depth per Yoast rules.',
       passed: allH2HaveMultipleP,
-      value: allH2HaveMultipleP ? 'All H2s have 2+ paragraphs' : 'One or more H2s has only 1 paragraph',
+      value: allH2HaveMultipleP
+        ? `All ${h2Counts.length} H2s have 2+ paragraphs`
+        : 'One or more H2s has only 1 paragraph',
     },
     {
       id: 'paragraph_depth',
       category: 'structure',
       title: 'Paragraph Depth (≥ 3 sentences per paragraph)',
       description: 'Prohibits shallow single-sentence paragraphs for sustained dwell time.',
-      passed: isParagraphRuleCompliant,
-      value: isParagraphRuleCompliant ? 'Passed (Well-structured)' : 'Shallow single-sentence paragraphs detected',
+      passed: hasWellFormedParagraphs,
+      value: hasWellFormedParagraphs
+        ? `Passed (${doc.paragraphs.length} paragraphs)`
+        : doc.paragraphs.length < 4
+          ? `Only ${doc.paragraphs.length} paragraphs found`
+          : 'Shallow single-sentence paragraphs detected',
     },
     {
       id: 'statistical_eeat',
       category: 'rich_media',
       title: 'Statistical E-E-A-T & Featured Snippet Data',
-      description: 'Emphasizes concrete metrics (ROI %, retention %) inside <strong> or <aside>.',
-      passed: isStatsCompliant,
-      value: isStatsCompliant ? 'Highlighted Statistics Present' : 'No highlighted statistical figures',
+      description: 'Emphasizes concrete metrics (ROI %, retention %) in bold or a callout.',
+      passed: doc.hasStrongFigure,
+      value: doc.hasStrongFigure ? 'Highlighted Statistics Present' : 'No highlighted statistical figures',
     },
+  ];
+}
+
+export function evaluateHtmlChecks(doc: ArticleDocument): SeoCheckItem[] {
+  const html = doc.html;
+  const imageTags = html ? html.match(/<img\b[^>]*>/gi) ?? [] : [];
+  const hasValidImages =
+    imageTags.length >= 2 && imageTags.every((img) => /src=/i.test(img) && /alt=/i.test(img));
+
+  return [
     {
       id: 'native_images',
       category: 'rich_media',
       title: 'Native In-Place Commercial Images (≥ 2)',
       description: 'Embedded with <figure>, <img>, alt, title, and lazy loading.',
       passed: hasValidImages,
-      value: `${imgMatches.length} images embedded`,
+      value: html ? `${imageTags.length} images embedded` : UNAVAILABLE_WITHOUT_HTML,
     },
     {
       id: 'contextual_links',
       category: 'rich_media',
       title: 'Contextual In-Text Anchor Links (≥ 2)',
       description: 'Native B2B internal & external linking within text flow.',
-      passed: isLinksCompliant,
-      value: `${linkMatches.length} links placed`,
+      passed: html ? doc.linkCount >= 2 : false,
+      value: html ? `${doc.linkCount} links placed` : UNAVAILABLE_WITHOUT_HTML,
     },
     {
       id: 'faq_schema',
       category: 'rich_media',
       title: 'Interactive FAQ / JSON-LD Schema',
       description: 'Targets Google People Also Ask (PAA) rich snippet results.',
-      passed: isFaqCompliant,
-      value: isFaqCompliant ? 'Interactive FAQ Present' : 'Missing FAQ',
+      passed: html ? doc.hasFaqSignal : false,
+      value: html
+        ? doc.hasFaqSignal
+          ? 'Interactive FAQ Present'
+          : 'Missing FAQ'
+        : UNAVAILABLE_WITHOUT_HTML,
     },
   ];
+}
 
+export function evaluateSeoChecklist(
+  htmlContent: string,
+  metadata: SeoMetadata,
+  focusKeyphraseInput?: string
+): SeoChecklistReport {
+  const doc = extractDocument(htmlContent, 'html');
+  const keyphrase = (focusKeyphraseInput || metadata.focusKeyphrase || '').trim();
+  const lowerKeyphrase = keyphrase.toLowerCase();
+  const totalWords = Math.max(1, doc.text.split(/\s+/).filter(Boolean).length);
+  const occurrences = keyphraseOccurrences(doc.text, lowerKeyphrase);
+
+  const items = [...evaluateDraftChecks(doc, metadata, keyphrase), ...evaluateHtmlChecks(doc)];
   const passedCount = items.filter((item) => item.passed).length;
-  const score = Math.round((passedCount / items.length) * 100);
 
   return {
-    score,
+    score: Math.round((passedCount / items.length) * 100),
     passedCount,
     totalCount: items.length,
     items,
-    keyphraseDensityPercent: densityPercent,
+    keyphraseDensityPercent: densityPercent(occurrences, lowerKeyphrase, totalWords),
     keyphraseOccurrences: occurrences,
   };
 }
