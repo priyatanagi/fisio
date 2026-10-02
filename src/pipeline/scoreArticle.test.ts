@@ -22,7 +22,7 @@ const englishMetadata: SeoMetadata = {
   tags: ['school'],
 };
 
-/** Passes 15 of 16. The measurer counts vowel groups, which puts Indonesian prose far under the Flesch band. */
+/** Passes 15 of 16 scored checks. The measurer counts vowel groups, which puts Indonesian prose far under the Flesch band. */
 const compliant = `## Apa Itu Program Makan Bergizi Gratis?
 
 Program makan bergizi gratis adalah program yang memberi makan siang gratis kepada anak di sekolah. Program ini berjalan dari hari Senin sampai Jumat, dan tidak ada biaya yang dipungut dari orang tua. Dapur makanan ada di dalam sekolah, sehingga makanan bisa langsung diantar ke kelas.
@@ -122,10 +122,9 @@ The school also keeps a written record of every serving day, and that record is 
 describe('scoreDraft', () => {
   it('scores a compliant draft above the target', () => {
     const score = scoreDraft(compliant, metadata, 'makan bergizi gratis', 900, 'id', 85);
-    expect(score.total).toBeGreaterThanOrEqual(85);
+    expect(score.total).toBe(100);
     expect(score.passed).toBe(true);
-    /** The 60-70 band is the only one an Indonesian draft of natural sentence length misses. */
-    expect(score.failed.map((c) => c.id)).toEqual(['flesch_range']);
+    expect(score.failed).toHaveLength(0);
   });
 
   it('scores a poor draft below the target and names why', () => {
@@ -152,10 +151,11 @@ describe('scoreDraft', () => {
     expect(score.checks.map((c) => c.id)).toContain('word_count_band');
   });
 
-  it('derives total from passed over total', () => {
+  it('derives total from passed over scored', () => {
     const score = scoreDraft(compliant, metadata, 'makan bergizi gratis', 900, 'id', 85);
-    const passed = score.checks.filter((c) => c.passed).length;
-    expect(score.total).toBe(Math.round((passed / score.checks.length) * 100));
+    const scored = score.checks.filter((c) => !c.unavailable);
+    const passed = scored.filter((c) => c.passed).length;
+    expect(score.total).toBe(Math.round((passed / scored.length) * 100));
   });
 
   it('accepts a word count inside the ±20% band and rejects one outside', () => {
@@ -179,6 +179,36 @@ describe('scoreDraft', () => {
     const score = scoreDraft(compliantEn, englishMetadata, 'school lunch', 500, 'en', 85);
     expect(score.total).toBe(100);
     expect(score.failed).toHaveLength(0);
+    expect(score.checks.filter((c) => c.unavailable)).toHaveLength(0);
+  });
+
+  it('withholds an unreachable Flesch band from the score but still reports it', () => {
+    const score = scoreDraft(compliant, metadata, 'makan bergizi gratis', 900, 'id', 85);
+    const band = score.checks.find((c) => c.id === 'flesch_range');
+    expect(band?.unavailable).toBe(true);
+    expect(band?.passed).toBe(false);
+    expect(band?.actual).toBe(String(score.flesch));
+    expect(band?.expected).toBe('60-70 is unreachable for this corpus; maximum possible is 14.2');
+    expect(score.checks.filter((c) => c.unavailable)).toHaveLength(1);
+    expect(score.checks.filter((c) => !c.unavailable)).toHaveLength(15);
+    expect(score.failed.map((c) => c.id)).not.toContain('flesch_range');
+  });
+
+  it('scores the Flesch band normally when the corpus can reach it', () => {
+    const score = scoreDraft(compliantEn, englishMetadata, 'school lunch', 500, 'en', 85);
+    const band = score.checks.find((c) => c.id === 'flesch_range');
+    expect(band?.unavailable).toBeUndefined();
+    expect(band?.passed).toBe(true);
+    expect(band?.expected).toBe('between 60 and 70');
+    expect(band?.actual).toBe(String(score.flesch));
+  });
+
+  it('keeps an empty draft failing the Flesch band instead of excusing it', () => {
+    const score = scoreDraft('', metadata, 'makan bergizi gratis', 900, 'id', 85);
+    const band = score.checks.find((c) => c.id === 'flesch_range');
+    expect(band?.unavailable).toBeUndefined();
+    expect(band?.passed).toBe(false);
+    expect(score.failed.map((c) => c.id)).toContain('flesch_range');
   });
 });
 
@@ -194,8 +224,14 @@ describe('formatFailedChecks', () => {
     }
   });
 
+  it('never asks the writer to fix a check the corpus cannot satisfy', () => {
+    const score = scoreDraft(poor, metadata, 'makan bergizi gratis', 900, 'id', 85);
+    expect(score.checks.find((c) => c.id === 'flesch_range')?.unavailable).toBe(true);
+    expect(formatFailedChecks(score)).not.toContain('flesch_range');
+  });
+
   it('returns an empty string when nothing failed', () => {
-    const score = scoreDraft(compliantEn, englishMetadata, 'school lunch', 500, 'en', 85);
+    const score = scoreDraft(compliant, metadata, 'makan bergizi gratis', 900, 'id', 85);
     expect(score.failed).toHaveLength(0);
     expect(formatFailedChecks(score)).toBe('');
   });
