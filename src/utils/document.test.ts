@@ -131,11 +131,47 @@ describe('extractDocument', () => {
     expect(doc.text).toBe('Judul Teks langsung. Sub Paragraf kedua.');
   });
 
-  it('treats a list block as one paragraph and not as headings', () => {
+  it('keeps a list block out of the paragraphs and out of the headings, but not out of the text', () => {
     const doc = extractDocument('- satu\n- dua\n- tiga', 'markdown');
     expect(doc.headings).toEqual([]);
-    expect(doc.paragraphs).toEqual(['satu dua tiga']);
+    expect(doc.paragraphs).toEqual([]);
     expect(doc.text).toBe('satu dua tiga');
+  });
+
+  it('counts a paragraph only when a block has no list line in it', () => {
+    const doc = extractDocument('Paragraf satu.\n\n- butir\n\nParagraf dua.', 'markdown');
+    expect(doc.paragraphs).toEqual(['Paragraf satu.', 'Paragraf dua.']);
+    expect(doc.text).toBe('Paragraf satu. butir Paragraf dua.');
+  });
+
+  it('does not let a numbered list stand in for a paragraph either', () => {
+    const doc = extractDocument('1. satu\n2. dua', 'markdown');
+    expect(doc.paragraphs).toEqual([]);
+    expect(doc.text).toBe('satu dua');
+  });
+
+  it('reads a setext heading as a heading, not as two paragraphs', () => {
+    const doc = extractDocument('Judul Artikel\n==============\n\nParagraf.', 'markdown');
+    expect(doc.headings).toEqual([{ level: 1, text: 'Judul Artikel' }]);
+    expect(doc.paragraphs).toEqual(['Paragraf.']);
+  });
+
+  it('reads a setext heading underlined with dashes as level 2', () => {
+    const doc = extractDocument('Judul Sub\n--------\n\nParagraf.', 'markdown');
+    expect(doc.headings).toEqual([{ level: 2, text: 'Judul Sub' }]);
+    expect(doc.paragraphs).toEqual(['Paragraf.']);
+  });
+
+  it('gives a draft and its render the same headings, paragraphs and text for lists and setext', () => {
+    const draft = 'Judul Artikel\n==============\n\nParagraf satu.\n\n- butir satu\n- butir dua\n\nParagraf dua.';
+    const rendered =
+      '<h1>Judul Artikel</h1><p>Paragraf satu.</p><ul><li>butir satu</li><li>butir dua</li></ul><p>Paragraf dua.</p>';
+    const fromMarkdown = extractDocument(draft, 'markdown');
+    const fromHtml = extractDocument(rendered, 'html');
+
+    expect(fromMarkdown.headings).toEqual(fromHtml.headings);
+    expect(fromMarkdown.paragraphs).toEqual(fromHtml.paragraphs);
+    expect(fromMarkdown.text).toBe(fromHtml.text);
   });
 
   it('drops a horizontal rule and an image-only block instead of counting them as paragraphs', () => {

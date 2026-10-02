@@ -110,6 +110,112 @@ Distribusi dilakukan melalui dapur yang dikelola sekolah. Pengambilan dilakukan 
     const relevant = ['h2_paragraph_rule', 'paragraph_depth', 'no_h1_in_body', 'heading_structure'];
     for (const id of relevant) expect(pass(fromHtml, id)).toBe(pass(fromMarkdown, id));
   });
+
+  it('reaches the same verdicts from a draft and its render on an article both paths pass', () => {
+    const draft =
+      '## Sasaran Penerima\n\n' +
+      'Program makan bergizi gratis menyediakan makan siang di sekolah dasar. Dapur berada di sekolah masing-masing.\n\n' +
+      'Semua peserta tidak dipungut biaya. Pendaftaran dilakukan pada awal tahun ajaran.\n\n' +
+      '## Mekanisme Distribusi\n\n' +
+      'Distribusi berjalan setiap hari kerja. Pengambilan dilakukan pada jam istirahat.\n\n' +
+      '- Butir pertama sudah dibagikan.\n- Butir kedua sudah dibagikan.\n\n' +
+      'Data menunjukkan **40%** peserta makan bergizi gratis aktif setiap hari. Jadwal distribusi tetap berjalan.';
+    const rendered =
+      '<h2>Sasaran Penerima</h2>' +
+      '<p>Program makan bergizi gratis menyediakan makan siang di sekolah dasar. Dapur berada di sekolah masing-masing.</p>' +
+      '<p>Semua peserta tidak dipungut biaya. Pendaftaran dilakukan pada awal tahun ajaran.</p>' +
+      '<h2>Mekanisme Distribusi</h2>' +
+      '<p>Distribusi berjalan setiap hari kerja. Pengambilan dilakukan pada jam istirahat.</p>' +
+      '<ul><li>Butir pertama sudah dibagikan.</li><li>Butir kedua sudah dibagikan.</li></ul>' +
+      '<p>Data menunjukkan <strong>40%</strong> peserta makan bergizi gratis aktif setiap hari. Jadwal distribusi tetap berjalan.</p>';
+    const fromDraft = evaluateDraftChecks(extractDocument(draft, 'markdown'), metadata, 'makan bergizi gratis');
+    const fromHtml = evaluateDraftChecks(extractDocument(rendered, 'html'), metadata, 'makan bergizi gratis');
+
+    const everyCheck = fromDraft.map((i) => i.id);
+    for (const id of everyCheck) expect(pass(fromHtml, id)).toBe(pass(fromDraft, id));
+
+    const shouldPass = [
+      'keyphrase_in_p1',
+      'statistical_eeat',
+      'h2_paragraph_rule',
+      'paragraph_depth',
+      'no_h1_in_body',
+      'heading_structure',
+    ];
+    for (const id of shouldPass) {
+      expect(pass(fromDraft, id)).toBe(true);
+      expect(pass(fromHtml, id)).toBe(true);
+    }
+  });
+
+  it('reaches the same keyphrase density verdict from a draft and its render when it passes', () => {
+    const opener =
+      'Program makan bergizi gratis menyediakan makan siang di sekolah dasar. Dapur berada di sekolah masing-masing.';
+    const filler =
+      'Dapur sekolah menyiapkan makan siang di ruang kelas. Semua peserta menerima porsi yang sama.';
+    const closer =
+      'Survey terbaru menunjukkan program makan bergizi gratis berjalan di enam puluh persen sekolah.';
+    const blocks = [opener, ...Array(18).fill(filler), closer];
+    const draft = '## Sasaran\n\n' + blocks.join('\n\n');
+    const rendered = '<h2>Sasaran</h2>' + blocks.map((b) => `<p>${b}</p>`).join('');
+    const fromDraft = evaluateDraftChecks(extractDocument(draft, 'markdown'), metadata, 'makan bergizi gratis');
+    const fromHtml = evaluateDraftChecks(extractDocument(rendered, 'html'), metadata, 'makan bergizi gratis');
+
+    expect(pass(fromDraft, 'keyphrase_density')).toBe(true);
+    expect(pass(fromHtml, 'keyphrase_density')).toBe(true);
+  });
+
+  it('does not let a list block stand in for a missing paragraph', () => {
+    const draft =
+      '## Sasaran\n\nProgram makan bergizi gratis menyediakan makan siang. Dapur berada di sekolah.\n\n' +
+      '- Butir satu sudah dibagikan.\n- Butir dua sudah dibagikan.';
+    const rendered =
+      '<h2>Sasaran</h2><p>Program makan bergizi gratis menyediakan makan siang. Dapur berada di sekolah.</p>' +
+      '<ul><li>Butir satu sudah dibagikan.</li><li>Butir dua sudah dibagikan.</li></ul>';
+    const fromDraft = evaluateDraftChecks(extractDocument(draft, 'markdown'), metadata, 'makan bergizi gratis');
+    const fromHtml = evaluateDraftChecks(extractDocument(rendered, 'html'), metadata, 'makan bergizi gratis');
+
+    for (const id of ['h2_paragraph_rule', 'paragraph_depth']) {
+      expect(pass(fromDraft, id)).toBe(false);
+      expect(pass(fromHtml, id)).toBe(false);
+    }
+  });
+
+  it('does not let a list block pass as the opening paragraph', () => {
+    const draft =
+      '## Sasaran\n\n- Program makan bergizi gratis dibagikan setiap hari kerja.\n- Butir kedua.\n\n' +
+      'Paragraf pembuka yang tidak memuat frasa kunci.';
+    const rendered =
+      '<h2>Sasaran</h2><ul><li>Program makan bergizi gratis dibagikan setiap hari kerja.</li><li>Butir kedua.</li></ul>' +
+      '<p>Paragraf pembuka yang tidak memuat frasa kunci.</p>';
+    const fromDraft = evaluateDraftChecks(extractDocument(draft, 'markdown'), metadata, 'makan bergizi gratis');
+    const fromHtml = evaluateDraftChecks(extractDocument(rendered, 'html'), metadata, 'makan bergizi gratis');
+
+    expect(pass(fromDraft, 'keyphrase_in_p1')).toBe(false);
+    expect(pass(fromHtml, 'keyphrase_in_p1')).toBe(false);
+  });
+
+  it('sees a setext h1 in a draft as the h1 it renders to', () => {
+    const draft = 'Judul Artikel\n==============\n\nParagraf pembuka artikel.';
+    const rendered = '<h1>Judul Artikel</h1><p>Paragraf pembuka artikel.</p>';
+    const fromDraft = evaluateDraftChecks(extractDocument(draft, 'markdown'), metadata, 'k');
+    const fromHtml = evaluateDraftChecks(extractDocument(rendered, 'html'), metadata, 'k');
+
+    expect(pass(fromDraft, 'no_h1_in_body')).toBe(false);
+    expect(pass(fromHtml, 'no_h1_in_body')).toBe(false);
+  });
+
+  it('reports the shallowest h2 in the failure value instead of assuming one paragraph', () => {
+    const empty = evaluateDraftChecks(extractDocument('## Sasaran\n\n## Mekanisme\n\nSatu. Dua. Tiga.', 'markdown'), metadata, 'k');
+    const item = empty.find((i) => i.id === 'h2_paragraph_rule');
+    expect(item?.passed).toBe(false);
+    expect(item?.value).toBe('One or more H2s has only 0 paragraphs');
+
+    const thin = evaluateDraftChecks(extractDocument('## Sasaran\n\nSatu. Dua. Tiga.', 'markdown'), metadata, 'k');
+    expect(thin.find((i) => i.id === 'h2_paragraph_rule')?.value).toBe(
+      'One or more H2s has only 1 paragraph'
+    );
+  });
 });
 
 describe('evaluateHtmlChecks', () => {
@@ -124,6 +230,13 @@ describe('evaluateHtmlChecks', () => {
     expect(items).toHaveLength(3);
     for (const item of items) expect(item.passed).toBe(false);
     expect(items.every((i) => i.value?.includes('not available'))).toBe(true);
+  });
+
+  it('marks a not-yet-renderable check unavailable, so it is not read as a failure', () => {
+    const draft = evaluateHtmlChecks(extractDocument('# Draft', 'markdown'));
+    const rendered = evaluateHtmlChecks(extractDocument('<img src="a.jpg" alt="a">', 'html'));
+    for (const item of draft) expect(item.unavailable).toBe(true);
+    for (const item of rendered) expect(item.unavailable).toBeFalsy();
   });
 
   it('passes images only when every image has src and alt', () => {

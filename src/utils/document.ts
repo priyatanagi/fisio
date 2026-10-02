@@ -14,6 +14,12 @@ const FENCED_CODE = /(`{3,})[\s\S]*?(?:\1|$)/g;
 
 const THEMATIC_BREAK = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/gm;
 
+/** Mirrors the markers markdownToPlainText strips, so a block is known to be a list. */
+const LIST_LINE = /^\s{0,3}(?:[-*+]|\d+\.)\s+/;
+
+/** A run of = or - under a line of text closes that line into a setext heading. */
+const SETEXT_UNDERLINE = /^\s{0,3}(=+|-+)\s*$/;
+
 const FAQ_WORDS = /faq|accordion|question|pertanyaan|tanya/i;
 
 function stripHtml(html: string): string {
@@ -72,20 +78,37 @@ function extractMarkdownParts(markdown: string): {
   const addProse = (lines: string[]): void => {
     const prose = markdownToPlainText(lines.join('\n'));
     if (!prose) return;
-    paragraphs.push(prose);
     corpus.push(prose);
+    // A list renders as <li>, never <p>, so counting it as a paragraph would let a draft
+    // clear a paragraph check that its own render then fails.
+    if (!lines.some((line) => LIST_LINE.test(line))) paragraphs.push(prose);
+  };
+
+  const addHeading = (level: number, source: string): void => {
+    const prose = markdownToPlainText(source);
+    headings.push({ level, text: prose });
+    if (prose) corpus.push(prose);
   };
 
   for (const block of blocks) {
     let body: string[] = [];
     for (const line of block.split('\n')) {
-      const heading = line.match(/^\s{0,3}(#{1,6})\s+(.*)$/);
-      if (heading) {
+      const atx = line.match(/^\s{0,3}(#{1,6})\s+(.*)$/);
+      const setext =
+        !atx && body.length > 0 && !LIST_LINE.test(body[body.length - 1])
+          ? line.match(SETEXT_UNDERLINE)
+          : null;
+
+      if (atx) {
         addProse(body);
         body = [];
-        const prose = markdownToPlainText(heading[2]);
-        headings.push({ level: heading[1].length, text: prose });
-        if (prose) corpus.push(prose);
+        addHeading(atx[1].length, atx[2]);
+      } else if (setext) {
+        const title = body[body.length - 1];
+        body = body.slice(0, -1);
+        addProse(body);
+        body = [];
+        addHeading(setext[1].startsWith('=') ? 1 : 2, title);
       } else {
         body.push(line);
       }

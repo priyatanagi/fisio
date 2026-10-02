@@ -9,6 +9,8 @@ export interface SeoCheckItem {
   passed: boolean;
   value?: string;
   recommendation?: string;
+  /** True when the check needs rendered HTML that does not exist yet, so it was never judged. */
+  unavailable?: boolean;
 }
 
 export interface SeoChecklistReport {
@@ -97,6 +99,7 @@ export function evaluateDraftChecks(
 
   const h2Counts = paragraphsPerH2(doc);
   const allH2HaveMultipleP = h2Counts.length > 0 && h2Counts.every((count) => count >= 2);
+  const shallowestH2 = h2Counts.length > 0 ? Math.min(...h2Counts) : 0;
 
   const hasShallowParagraph = doc.paragraphs.some(
     (p) => p.split(/(?<=[.!?])\s+/).filter((s) => s.length > 10).length < 2
@@ -140,9 +143,9 @@ export function evaluateDraftChecks(
       passed: descLen >= 70 && descLen <= 155,
       value: `${descLen}/155 characters`,
       recommendation: descLen > 155
-        ? 'Shorten the meta description'
+        ? 'Reduce to under 155 chars'
         : descLen < 70
-          ? 'Lengthen the meta description'
+          ? 'Expand to at least 100 chars'
           : undefined,
     },
     {
@@ -189,7 +192,7 @@ export function evaluateDraftChecks(
       passed: occurrences >= 2 && density >= 0.4 && density <= 2.5,
       value: `${density}% across ${totalWords} words`,
       recommendation: density < 0.4
-        ? 'Mention the keyphrase 1–2 more times'
+        ? 'Mention keyphrase 1–2 more times'
         : density > 2.5
           ? 'Reduce keyphrase repetition'
           : undefined,
@@ -201,7 +204,7 @@ export function evaluateDraftChecks(
       description: 'The CMS supplies the H1; the body must not duplicate it.',
       passed: h1Count === 0,
       value: `${h1Count} H1 heading(s) in the body`,
-      recommendation: h1Count > 0 ? 'Change H1 headings to H2 to avoid duplicate H1 penalties' : undefined,
+      recommendation: h1Count > 0 ? 'Change <h1> tags to <h2> to avoid duplicate H1 penalties' : undefined,
     },
     {
       id: 'heading_structure',
@@ -219,7 +222,9 @@ export function evaluateDraftChecks(
       passed: allH2HaveMultipleP,
       value: allH2HaveMultipleP
         ? `All ${h2Counts.length} H2s have 2+ paragraphs`
-        : 'One or more H2s has only 1 paragraph',
+        : h2Counts.length === 0
+          ? 'No H2 headings found'
+          : `One or more H2s has only ${shallowestH2} paragraph${shallowestH2 === 1 ? '' : 's'}`,
     },
     {
       id: 'paragraph_depth',
@@ -258,6 +263,7 @@ export function evaluateHtmlChecks(doc: ArticleDocument): SeoCheckItem[] {
       description: 'Embedded with <figure>, <img>, alt, title, and lazy loading.',
       passed: hasValidImages,
       value: html ? `${imageTags.length} images embedded` : UNAVAILABLE_WITHOUT_HTML,
+      unavailable: !html,
     },
     {
       id: 'contextual_links',
@@ -266,6 +272,7 @@ export function evaluateHtmlChecks(doc: ArticleDocument): SeoCheckItem[] {
       description: 'Native B2B internal & external linking within text flow.',
       passed: html ? doc.linkCount >= 2 : false,
       value: html ? `${doc.linkCount} links placed` : UNAVAILABLE_WITHOUT_HTML,
+      unavailable: !html,
     },
     {
       id: 'faq_schema',
@@ -278,6 +285,7 @@ export function evaluateHtmlChecks(doc: ArticleDocument): SeoCheckItem[] {
           ? 'Interactive FAQ Present'
           : 'Missing FAQ'
         : UNAVAILABLE_WITHOUT_HTML,
+      unavailable: !html,
     },
   ];
 }
