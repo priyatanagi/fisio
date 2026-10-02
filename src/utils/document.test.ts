@@ -210,6 +210,34 @@ describe('extractDocument', () => {
     expect(doc.paragraphs).toEqual(rendered.paragraphs);
   });
 
+  it('reads a tight list that follows a heading in the same block', () => {
+    const draft = '## Sasaran\n- penerima manfaat adalah anak sekolah\n- pendaftaran dilakukan pada awal tahun';
+    const rendered =
+      '<h2>Sasaran</h2><ul><li>penerima manfaat adalah anak sekolah</li><li>pendaftaran dilakukan pada awal tahun</li></ul>';
+    const doc = extractDocument(draft, 'markdown');
+    const fromHtml = extractDocument(rendered, 'html');
+    expect(doc.headings).toEqual(fromHtml.headings);
+    expect(doc.paragraphs).toEqual([]);
+    expect(doc.paragraphs).toEqual(fromHtml.paragraphs);
+  });
+
+  it('reads the list lines that follow a heading inside a list block', () => {
+    const doc = extractDocument('- satu\n## Judul\n- dua', 'markdown');
+    const rendered = extractDocument('<ul><li>satu</li></ul><h2>Judul</h2><ul><li>dua</li></ul>', 'html');
+    expect(doc.headings).toEqual(rendered.headings);
+    expect(doc.paragraphs).toEqual([]);
+    expect(doc.paragraphs).toEqual(rendered.paragraphs);
+    expect(doc.text).toBe(rendered.text);
+  });
+
+  it('still reads blank-line-separated items after a heading as one loose list', () => {
+    const doc = extractDocument('## Sasaran\n- satu\n\n- dua', 'markdown');
+    const rendered = extractDocument('<h2>Sasaran</h2><ul><li><p>satu</p></li><li><p>dua</p></li></ul>', 'html');
+    expect(doc.headings).toEqual(rendered.headings);
+    expect(doc.paragraphs).toEqual(['satu', 'dua']);
+    expect(doc.paragraphs).toEqual(rendered.paragraphs);
+  });
+
   it('does not join two lists that use different markers', () => {
     expect(extractDocument('- satu\n\n* dua', 'markdown').paragraphs).toEqual([]);
     expect(extractDocument('- a\n- b\n\n* c', 'markdown').paragraphs).toEqual([]);

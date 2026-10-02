@@ -24,6 +24,11 @@ const SETEXT_UNDERLINE = /^\s{0,3}(=+|-+)\s*$/;
 
 const isListItemLine = (line: string): boolean => LIST_MARKER.test(line);
 
+/** In CommonMark only these markers may interrupt a paragraph; an ordered `2.` cannot. */
+const INTERRUPTS_PARAGRAPH = /^\s{0,3}(?:[-*+]|1\.)\s+/;
+
+const startsListAfterProse = (line: string): boolean => INTERRUPTS_PARAGRAPH.test(line);
+
 /** `-`, `*` and `+` each open their own list, as do `.` and `)` runs of numbers. */
 function listMarkerKind(line: string): string {
   const marker = line.match(/^\s{0,3}([-*+]|\d+[.)])\s+/);
@@ -123,6 +128,9 @@ function extractMarkdownParts(markdown: string): {
 
   const isBlank = (lines: string[]): boolean => lines.every((line) => !line.trim());
 
+  /** Index of the next block, shared with consumeList so both read the source in one pass. */
+  let cursor = 0;
+
   /**
    * The leading lines a list claims: its items plus the lines that continue them. An ATX heading
    * interrupts a paragraph and so ends the list; a setext underline cannot and does not.
@@ -162,36 +170,46 @@ function extractMarkdownParts(markdown: string): {
     addParagraph(body);
   };
 
-  for (let i = 0; i < chunks.length; ) {
-    const chunk = chunks[i];
-    i += 1;
-    if (isBlank(chunk)) continue;
-
-    // A block opening with a list marker is list content; consecutive such blocks sharing a marker
-    // are one list, and a blank line between its items is what makes it loose. A heading between
-    // two items is content of its own and ends the list there.
-    if (isListItemLine(chunk[0])) {
-      const kind = listMarkerKind(chunk[0]);
-      const items: string[][] = [];
-      let tail: string[] = [];
-      let block = chunk;
-      for (;;) {
-        const item = takeListLines(block);
-        items.push(item);
-        tail = block.slice(item.length);
-        if (!isBlank(tail)) break;
-        const next = i < chunks.length ? chunks[i] : null;
-        if (!next || isBlank(next) || listMarkerKind(next[0]) !== kind) break;
-        block = next;
-        i += 1;
-      }
-      const loose = items.length > 1;
-      for (const item of items) (loose ? addLooseItems : addListWords)(item);
-      if (!isBlank(tail)) addHeadingsAndProse(tail);
-      continue;
+  /**
+   * Consumes the list starting at `lines`: its items, plus the following blocks that share its
+   * marker. A blank line between items makes the list loose. Returns whatever followed the list.
+   */
+  const consumeList = (lines: string[]): string[] => {
+    const kind = listMarkerKind(lines[0]);
+    const items: string[][] = [];
+    let tail: string[] = [];
+    let block = lines;
+    for (;;) {
+      const item = takeListLines(block);
+      items.push(item);
+      tail = block.slice(item.length);
+      if (!isBlank(tail)) break;
+      const next = cursor < chunks.length ? chunks[cursor] : null;
+      if (!next || isBlank(next) || listMarkerKind(next[0]) !== kind) break;
+      block = next;
+      cursor += 1;
     }
+    const loose = items.length > 1;
+    for (const item of items) (loose ? addLooseItems : addListWords)(item);
+    return tail;
+  };
 
-    addHeadingsAndProse(chunk);
+  while (cursor < chunks.length) {
+    let rest = chunks[cursor];
+    cursor += 1;
+
+    // A block is read in segments: prose and headings, then the list that interrupts them, then
+    // whatever the list left. Without this a list line following a heading would be read as prose.
+    while (!isBlank(rest)) {
+      if (isListItemLine(rest[0])) {
+        rest = consumeList(rest);
+        continue;
+      }
+      const cut = rest.findIndex(startsListAfterProse);
+      addHeadingsAndProse(cut < 0 ? rest : rest.slice(0, cut));
+      if (cut < 0) break;
+      rest = rest.slice(cut);
+    }
   }
 
   return { text: corpus.join(' '), headings, paragraphs };

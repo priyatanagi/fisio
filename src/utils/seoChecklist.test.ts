@@ -225,6 +225,37 @@ Distribusi dilakukan melalui dapur yang dikelola sekolah. Pengambilan dilakukan 
     }
   });
 
+  it('scores a list written straight after a heading the same from a draft and its render', () => {
+    const items = [
+      '- penerima manfaat adalah anak sekolah dasar. Pendaftaran gratis untuk semua.',
+      '- jadwal distribusi berjalan setiap hari kerja. Pengambilan saat jam istirahat.',
+    ];
+    const prose = [
+      'Paragraf satu bagian ini. Kalimat kedua. Kalimat ketiga.',
+      'Paragraf dua bagian ini. Kalimat kedua. Kalimat ketiga.',
+      'Paragraf tiga bagian ini. Kalimat kedua. Kalimat ketiga.',
+      'Paragraf empat bagian ini. Kalimat kedua. Kalimat ketiga.',
+    ];
+
+    for (const count of [3, 4]) {
+      const draft = '## Sasaran\n' + items.join('\n') + '\n\n' + prose.slice(0, count).join('\n\n');
+      const rendered =
+        '<h2>Sasaran</h2><ul>' +
+        items.map((item) => `<li>${item.slice(2)}</li>`).join('') +
+        '</ul>' +
+        prose.slice(0, count).map((p) => `<p>${p}</p>`).join('');
+      const fromDraft = evaluateDraftChecks(extractDocument(draft, 'markdown'), metadata, 'makan bergizi gratis');
+      const fromHtml = evaluateDraftChecks(extractDocument(rendered, 'html'), metadata, 'makan bergizi gratis');
+
+      for (const id of fromDraft.map((i) => i.id)) expect(pass(fromHtml, id)).toBe(pass(fromDraft, id));
+      // The heading keeps its prose paragraphs either way; only the depth threshold moves.
+      expect(pass(fromDraft, 'h2_paragraph_rule')).toBe(true);
+      expect(pass(fromHtml, 'h2_paragraph_rule')).toBe(true);
+      expect(pass(fromDraft, 'paragraph_depth')).toBe(count === 4);
+      expect(pass(fromHtml, 'paragraph_depth')).toBe(count === 4);
+    }
+  });
+
   it('reads a heading that follows list items the same from a draft and its render', () => {
     const first = 'Butir pertama Program makan bergizi gratis.';
     const second = 'Butir kedua Program makan bergizi gratis.';
