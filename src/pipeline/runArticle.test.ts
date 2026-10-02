@@ -89,12 +89,16 @@ const baseConfig: PipelineConfig = {
   targetWords: 900,
 };
 
-async function run(config: Partial<PipelineConfig>, handlers: Record<string, any>) {
+async function run(
+  config: Partial<PipelineConfig>,
+  handlers: Record<string, any>,
+  topic: { seedTopic?: string; focusKeyphrase?: string } = {}
+) {
   for (const key of Object.keys(calls)) delete calls[key];
   (globalThis as any).__handlers = handlers;
   return runArticle({
-    seedTopic: 'Treadmill buying',
-    focusKeyphrase: 'treadmill',
+    seedTopic: topic.seedTopic ?? 'Treadmill buying',
+    focusKeyphrase: topic.focusKeyphrase ?? 'treadmill',
     config: { ...baseConfig, ...config },
     profile: DEFAULT_USER_PROFILE,
     multiAgentConfig,
@@ -134,6 +138,24 @@ describe('floor configuration', () => {
     expect(calls.impower).toBeUndefined();
   });
 
+  it('never calls the Reviewer when the reviewer is off', async () => {
+    await run({ judge: false, impower: 'off', reviewer: 'off' }, {
+      creator: () => ({ markdownContent: markdown }),
+      designer: () => ({ html, warnings: [] }),
+    });
+    expect(calls.reviewer).toBeUndefined();
+  });
+
+  it('invokes nothing but Creator and Designer when all three are switched off', async () => {
+    const result = await run({ judge: false, impower: 'off', reviewer: 'off' }, {
+      creator: () => ({ markdownContent: markdown }),
+      designer: () => ({ html, warnings: [] }),
+    });
+    expect(total()).toBe(2);
+    expect(Object.keys(calls).sort()).toEqual(['creator', 'designer']);
+    expect(result.status).toBe('done');
+  });
+
   it('feeds the refined topic from Judge to Creator', async () => {
     let received = '';
     await run({ judge: true }, {
@@ -146,6 +168,94 @@ describe('floor configuration', () => {
     });
     expect(calls.judge).toBe(1);
     expect(received).toBe('Choosing a commercial treadmill');
+  });
+});
+
+describe('user topic integrity', () => {
+  const SEED = 'Program Makan Bergizi Gratis';
+  const KEYWORD = 'makan bergizi gratis';
+  const DRIFTED = 'Optimalisasi Infrastruktur Kebugaran untuk Fasilitas Berkinerja Tinggi';
+
+  const handlers = (seen: Record<string, any>) => ({
+    judge: (input: any) => {
+      seen.judge = input;
+      return { ...judgeOutput, refinedTopic: DRIFTED };
+    },
+    impower: (input: any) => {
+      seen.impower = input;
+      return brief;
+    },
+    creator: (input: any) => {
+      seen.creator = input;
+      return { markdownContent: markdown };
+    },
+    designer: () => ({ html, warnings: [] }),
+  });
+
+  it('never lets a drifted judge angle replace the topic the user typed', async () => {
+    const seen: Record<string, any> = {};
+    const result = await run(
+      { judge: true, impower: 'standard', reviewer: 'off' },
+      handlers(seen),
+      { seedTopic: SEED, focusKeyphrase: KEYWORD }
+    );
+
+    expect(seen.judge.seedTopic).toBe(SEED);
+    expect(seen.impower.topic).toBe(SEED);
+    expect(seen.creator.seedTopic).toBe(SEED);
+    expect(result.article?.topic).toBe(SEED);
+  });
+
+  it('carries the user focus keyphrase into Impower and Creator', async () => {
+    const seen: Record<string, any> = {};
+    await run(
+      { judge: true, impower: 'standard', reviewer: 'off' },
+      handlers(seen),
+      { seedTopic: SEED, focusKeyphrase: KEYWORD }
+    );
+
+    expect(seen.impower.focusKeyphrase).toBe(KEYWORD);
+    expect(seen.creator.focusKeyphrase).toBe(KEYWORD);
+  });
+
+  it('keeps the user keyphrase when Impower and Judge are both off', async () => {
+    const seen: Record<string, any> = {};
+    const result = await run(
+      { judge: false, impower: 'off', reviewer: 'off' },
+      {
+        creator: (input: any) => {
+          seen.creator = input;
+          return { markdownContent: markdown };
+        },
+        designer: () => ({ html, warnings: [] }),
+      },
+      { seedTopic: SEED, focusKeyphrase: KEYWORD }
+    );
+
+    expect(seen.creator.seedTopic).toBe(SEED);
+    expect(seen.creator.focusKeyphrase).toBe(KEYWORD);
+    // With no brief supplied, the keyphrase is resolved from the creator's
+    // self-plan or this pinned one, so the article still lands on the keyword.
+    expect(result.article?.seoMetadata.focusKeyphrase).toBe(KEYWORD);
+    expect(result.article?.topic).toBe(SEED);
+  });
+
+  it('still accepts a judge refinement that stays on the user subject', async () => {
+    const seen: Record<string, any> = {};
+    await run(
+      { judge: true, impower: 'off', reviewer: 'off' },
+      {
+        judge: () => judgeOutput,
+        creator: (input: any) => {
+          seen.creator = input;
+          return { markdownContent: markdown };
+        },
+        designer: () => ({ html, warnings: [] }),
+      },
+      { seedTopic: 'Treadmill buying', focusKeyphrase: 'treadmill' }
+    );
+
+    expect(seen.creator.seedTopic).toBe('Choosing a commercial treadmill');
   });
 });
 

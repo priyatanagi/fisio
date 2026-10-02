@@ -6,6 +6,7 @@ import {
   buildUniversalRulesBlock,
   buildDesignTokenBlock,
   buildJudgePrompt,
+  buildImpowerPrompt,
   buildCreatorPrompt,
 } from './agentPrompts';
 
@@ -78,6 +79,62 @@ describe('buildJudgePrompt', () => {
       DEFAULT_USER_PROFILE
     );
     expect(prompt).toContain('roi gym');
+  });
+});
+
+describe('user intent lock', () => {
+  const driftCase = {
+    seedTopic: 'Optimalisasi Infrastruktur Kebugaran',
+    originalTopic: 'Program Makan Bergizi Gratis',
+    focusKeyphrase: 'makan bergizi gratis',
+  };
+
+  it('tells the Judge it may not swap the subject', () => {
+    const prompt = buildJudgePrompt(
+      { seedTopic: 'Program Makan Bergizi Gratis' },
+      DEFAULT_USER_PROFILE
+    );
+    expect(prompt).toMatch(/must stay on the exact subject/i);
+    expect(prompt).toMatch(/SUBJECT LOCK/);
+  });
+
+  it('pins the original topic and keyphrase in the Creator prompt', () => {
+    const prompt = buildCreatorPrompt(
+      { ...driftCase, targetWords: 900, brief: null },
+      DEFAULT_USER_PROFILE
+    );
+    expect(prompt).toContain('Program Makan Bergizi Gratis');
+    expect(prompt).toMatch(/PINNED FOCUS KEYPHRASE/);
+    expect(prompt).toContain('makan bergizi gratis');
+    expect(prompt).toMatch(/Write about the ORIGINAL USER TOPIC/);
+  });
+
+  it('still locks the topic when no separate original exists', () => {
+    const prompt = buildCreatorPrompt(
+      { seedTopic: 'Treadmill guide', targetWords: 900, brief: null },
+      DEFAULT_USER_PROFILE
+    );
+    expect(prompt).toMatch(/must stay exactly on the TOPIC above/i);
+    expect(prompt).not.toContain('ORIGINAL USER TOPIC');
+  });
+
+  it('pins the original topic and keyphrase in the Impower prompt', () => {
+    const prompt = buildImpowerPrompt(
+      { topic: 'Optimalisasi Infrastruktur Kebugaran', seedTopic: 'Program Makan Bergizi Gratis', focusKeyphrase: 'makan bergizi gratis', targetWords: 900 },
+      DEFAULT_USER_PROFILE
+    );
+    expect(prompt).toContain('Program Makan Bergizi Gratis');
+    expect(prompt).toMatch(/PINNED FOCUS KEYPHRASE/);
+    expect(prompt).toMatch(/authoritative subject/i);
+  });
+
+  it('omits the original block when the angle matches the seed topic', () => {
+    const prompt = buildImpowerPrompt(
+      { topic: 'Treadmill guide', seedTopic: 'Treadmill guide', targetWords: 900 },
+      DEFAULT_USER_PROFILE
+    );
+    expect(prompt).not.toContain('ORIGINAL USER TOPIC');
+    expect(prompt).not.toContain('PINNED FOCUS KEYPHRASE');
   });
 });
 

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   batchQueueReducer,
   initialQueueState,
+  lengthTargetFor,
   type QueueState,
   type BatchRow,
 } from './useBatchQueue';
@@ -355,5 +356,19 @@ describe('null-job safety', () => {
     for (const action of actions) {
       expect(batchQueueReducer(initialQueueState, action)).toBe(initialQueueState);
     }
+  });
+});
+
+describe('lengthTargetFor', () => {
+  it('keeps the row length so batch articles are not labelled with the global preset', () => {
+    expect(lengthTargetFor(makeRow(0, { targetLength: 'short' }))).toBe('short');
+    expect(lengthTargetFor(makeRow(0, { targetLength: 'long' }))).toBe('long');
+    expect(lengthTargetFor(makeRow(0, { targetLength: 'custom' }))).toBe('custom');
+    expect(lengthTargetFor(makeRow(0, { targetLength: 'standard' }))).toBe('standard');
+  });
+
+  it('falls back to standard for an unknown csv value', () => {
+    expect(lengthTargetFor(makeRow(0, { targetLength: 'deep' }))).toBe('standard');
+    expect(lengthTargetFor(makeRow(0, { targetLength: '' }))).toBe('standard');
   });
 });

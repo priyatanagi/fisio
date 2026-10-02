@@ -1,7 +1,8 @@
 import type { GeneratedArticle } from '../types/article';
+import type { RunRecord } from '../types/run';
 
 const DB_NAME = 'fisio_architect';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export interface JobRecord {
   jobId: string;
@@ -28,6 +29,10 @@ function openDatabase(factory: IDBFactory): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains('meta')) {
         db.createObjectStore('meta', { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains('runs')) {
+        const store = db.createObjectStore('runs', { keyPath: 'runId' });
+        store.createIndex('updatedAt', 'updatedAt');
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -123,4 +128,53 @@ export async function getMeta<T>(key: string): Promise<T | undefined> {
 
 export async function setMeta(key: string, value: unknown): Promise<void> {
   await run('meta', 'readwrite', (store) => store.put({ key, value }));
+}
+
+// ---- Run journal ----------------------------------------------------------
+// Every generation is journalled before its first provider call, so a run that
+// dies mid-flight is still on record and can be retried from History.
+
+export async function putRun(record: RunRecord): Promise<void> {
+  await run('runs', 'readwrite', (store) => store.put(record));
+}
+
+export async function getRun(runId: string): Promise<RunRecord | undefined> {
+  return run<RunRecord | undefined>('runs', 'readonly', (store) => store.get(runId));
+}
+
+export async function listRuns(): Promise<RunRecord[]> {
+  const all = await run<RunRecord[]>('runs', 'readonly', (store) => store.getAll());
+  return all.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
+
+export async function deleteRun(runId: string): Promise<void> {
+  await run('runs', 'readwrite', (store) => store.delete(runId));
+}
+
+/**
+ * Closes out runs that were still marked running when the app last went away.
+ * A 'running' record can only exist after a reload or a closed tab, because the
+ * run writes a terminal status on every normal exit.
+ */
+export async function markInterruptedRuns(
+  reason = 'Interrupted before it finished — the page was closed or reloaded mid-run.'
+): Promise<number> {
+  const stale = (await listRuns()).filter((r) => r.status === 'running');
+  for (const record of stale) {
+    await putRun({ ...record, status: 'interrupted', error: reason, updatedAt: new Date().toISOString() });
+  }
+  return stale.length;
+}
+
+/**
+ * Keeps the journal bounded. Failed and interrupted runs are always kept
+ * because they are the retryable ones; successful ones are trimmed to the
+ * newest `keep`.
+ */
+export async function pruneRuns(keep = 100): Promise<number> {
+  const all = await listRuns();
+  const succeeded = all.filter((r) => r.status === 'done' || r.status === 'needs_attention');
+  const surplus = succeeded.slice(Math.max(keep, 0));
+  for (const record of surplus) await deleteRun(record.runId);
+  return surplus.length;
 }

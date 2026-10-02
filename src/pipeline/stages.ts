@@ -1,6 +1,6 @@
-import type { GeneratedArticle, OutputFormatId, SeoMetadata } from '../types/article';
+import type { GeneratedArticle, LengthTarget, OutputFormatId, SeoMetadata } from '../types/article';
 
-export type { GeneratedArticle, OutputFormatId, SeoMetadata } from '../types/article';
+export type { GeneratedArticle, LengthTarget, OutputFormatId, SeoMetadata } from '../types/article';
 
 export type AgentRole = 'judge' | 'impower' | 'creator' | 'reviewer' | 'designer';
 
@@ -27,6 +27,8 @@ export interface PipelineConfig {
   targetFormats: OutputFormatId[];
   languages: TargetLanguage[];
   targetWords: number;
+  /** Optional so configs persisted before this field existed still typecheck. */
+  lengthTarget?: LengthTarget;
 }
 
 export interface OutlineSection {
@@ -128,4 +130,5 @@ export const DEFAULT_PIPELINE_CONFIG: PipelineConfig = {
   targetFormats: ['inline-en', 'inline-id', 'clean-en', 'clean-id'],
   languages: ['en', 'id'],
   targetWords: 950,
+  lengthTarget: 'standard',
 };

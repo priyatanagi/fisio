@@ -17,6 +17,7 @@ import type {
   TargetLanguage,
 } from './stages';
 import { resolveBrief } from './seoBrief';
+import { resolveTopicForRun } from './topicFidelity';
 import { runAgent, AgentError } from './runAgent';
 
 export interface RunArticleOptions {
@@ -102,6 +103,8 @@ async function runCreatorAndReviewer(
   onStage('creating', 'Writing the article markdown...');
   let creator = (await call('creator', {
     seedTopic: refinedTopic,
+    originalTopic: options.seedTopic.trim(),
+    focusKeyphrase: options.focusKeyphrase,
     targetWords: config.targetWords,
     brief,
     toneOverride: options.toneOverride ?? '',
@@ -136,6 +139,8 @@ async function runCreatorAndReviewer(
       onStage('creating', 'Applying reviewer feedback (revision 1 of 1)...');
       creator = (await call('creator', {
         seedTopic: refinedTopic,
+        originalTopic: options.seedTopic.trim(),
+        focusKeyphrase: options.focusKeyphrase,
         targetWords: config.targetWords,
         brief,
         toneOverride: options.toneOverride ?? '',
@@ -257,7 +262,8 @@ export async function runArticle(options: RunArticleOptions): Promise<RunArticle
         seedTopic,
         focusKeyphrase: options.focusKeyphrase,
       })) as JudgeOutput;
-      refinedTopic = judge.refinedTopic || seedTopic;
+      // The Judge sharpens the angle; it does not get to replace the subject.
+      refinedTopic = resolveTopicForRun(seedTopic, judge.refinedTopic);
     }
 
     // ---- Stage 2: Impower ---------------------------------------------
@@ -271,6 +277,8 @@ export async function runArticle(options: RunArticleOptions): Promise<RunArticle
       }
       brief = (await call('impower', {
         topic: refinedTopic,
+        seedTopic,
+        focusKeyphrase: options.focusKeyphrase,
         targetWords: config.targetWords,
         research,
       })) as ImpowerOutput;
@@ -434,7 +442,7 @@ function buildArticle(params: BuildArticleParams): GeneratedArticle {
     focusKeyphrase: metadata.focusKeyphrase || options.focusKeyphrase,
     secondaryKeywords: brief?.secondaryKeywords.join(', ') ?? '',
     language: options.config.languages[0] ?? 'en',
-    lengthTarget: 'custom',
+    lengthTarget: options.config.lengthTarget ?? 'custom',
     targetWordCount: options.config.targetWords,
     targetFormats: options.config.targetFormats,
     formats: formatsBundle as GeneratedArticle['formats'],

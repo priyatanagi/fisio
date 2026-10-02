@@ -1,3 +1,5 @@
+import type { LengthTarget } from '../types/article';
+
 export const DEFAULT_BASE_SYSTEM_PROMPT = `# Commercial Fitness SEO Content Strategy & B2B Procurement Prompt
 (RealleaderUSA Indonesia & Global Commercial Fitness Standards)
 
@@ -93,6 +95,18 @@ export const LENGTH_PRESETS = [
   { id: 'long', label: 'Deep Authority', words: 1500, range: '1,200 – 1,800 words', desc: 'Exhaustive pillar guide for high competition' },
   { id: 'custom', label: 'Custom', words: 1000, range: 'Customizable', desc: 'Set your precise target length' },
 ] as const;
+
+/**
+ * Resolves the pipeline's target word count for a selected length preset.
+ * Fixed presets drive the count directly; 'custom' keeps whatever the slider holds.
+ */
+export function targetWordsForLengthTarget(
+  lengthTarget: LengthTarget,
+  currentTargetWords: number
+): number {
+  if (lengthTarget === 'custom') return currentTargetWords;
+  return LENGTH_PRESETS.find((p) => p.id === lengthTarget)?.words ?? currentTargetWords;
+}
 
 export interface KeywordSegment {
   id: string;

@@ -79,9 +79,11 @@ ${keyphrase ? `PREFERRED FOCUS KEYPHRASE: "${keyphrase}"` : ''}
 
 Evaluate the seed topic against the target market above. Choose ONE angle and reject the alternatives, explaining why each was rejected.
 
+SUBJECT LOCK: refinedTopic must stay on the exact subject of SEED TOPIC. You may narrow the angle, add the audience, or sharpen the framing, but you must NOT swap in a different subject, product, industry, or subject matter. If the seed topic sits outside this business's niche, keep the seed topic's subject and choose the angle that best connects them — never answer a different question instead.
+
 Respond with ONLY this JSON shape:
 {
-  "refinedTopic": "the specific angle this article will take",
+  "refinedTopic": "the specific angle this article will take, same subject as the seed topic",
   "searchIntent": "informational | commercial | transactional | navigational",
   "audienceAngle": "how this framing differs for this specific business",
   "subtopics": ["4 to 6 subtopics"],
@@ -108,11 +110,18 @@ Provide up to 20 LSI entities and up to 10 question queries.`;
 }
 
 export function buildImpowerPrompt(
-  input: { topic: string; targetWords: number; research?: unknown },
+  input: { topic: string; seedTopic?: string; focusKeyphrase?: string; targetWords: number; research?: unknown },
   profile: UserProfile
 ): string {
   const research = input.research
     ? `\nKEYWORD RESEARCH:\n${JSON.stringify(input.research, null, 2)}\n`
+    : '';
+  const sourceTopic =
+    input.seedTopic?.trim() && input.seedTopic.trim() !== input.topic.trim()
+      ? `\nORIGINAL USER TOPIC (authoritative subject, the article must stay on this): "${input.seedTopic.trim()}"\nTOPIC is only the angle chosen for it. Never replace the subject above.\n`
+      : '';
+  const pinnedKeyword = input.focusKeyphrase?.trim()
+    ? `\nPINNED FOCUS KEYPHRASE (the user chose this; use it verbatim, do not substitute): "${input.focusKeyphrase.trim()}"\n`
     : '';
   return `You are Impower: an SEO strategist who produces the content brief an article will be written from.
 
@@ -120,7 +129,7 @@ ${buildBrandBlock(profile)}
 ${buildUniversalRulesBlock(DEFAULT_UNIVERSAL_RULES)}
 
 TOPIC: "${input.topic}"
-TARGET LENGTH: ~${input.targetWords} words
+${sourceTopic}${pinnedKeyword}TARGET LENGTH: ~${input.targetWords} words
 ${research}
 Respond with ONLY this JSON shape:
 {
@@ -143,6 +152,8 @@ Respond with ONLY this JSON shape:
 export function buildCreatorPrompt(
   input: {
     seedTopic: string;
+    originalTopic?: string;
+    focusKeyphrase?: string;
     targetWords: number;
     brief: SeoBrief | null;
     toneOverride?: string;
@@ -166,13 +177,21 @@ export function buildCreatorPrompt(
     ? '{ "markdownContent": "# First section\\n\\nFull article markdown..." }'
     : '{ "markdownContent": "# First section\\n\\nFull article markdown...", "selfPlanned": { "seoMetadata": {}, "secondaryKeywords": [], "outline": [], "faqPlan": [], "statPlan": [], "internalLinkTargets": [] } }';
 
+  const sourceTopic =
+    input.originalTopic?.trim() && input.originalTopic.trim() !== input.seedTopic.trim()
+      ? `\nORIGINAL USER TOPIC (the authoritative subject of this article): "${input.originalTopic.trim()}"\nTOPIC above is only the angle chosen for it. Write about the ORIGINAL USER TOPIC. Do not drift into the brand's own products, industry, or any other subject.\n`
+      : '\nThe article must stay exactly on the TOPIC above. Do not substitute a different subject, product, or industry from the brand block above.\n';
+  const pinnedKeyword = input.focusKeyphrase?.trim()
+    ? `\nPINNED FOCUS KEYPHRASE (use this exact phrase; it overrides any other keyphrase from the brief): "${input.focusKeyphrase.trim()}"\n`
+    : '';
+
   return `You are the Creator: a long-form article writer.
 
 ${buildBrandBlock(profile)}
 ${buildUniversalRulesBlock(DEFAULT_UNIVERSAL_RULES)}
 
 TOPIC: "${input.seedTopic}"
-TARGET LENGTH: ~${input.targetWords} words
+${sourceTopic}${pinnedKeyword}TARGET LENGTH: ~${input.targetWords} words
 ${briefBlock}${selfPlan}${tone}${extra}
 Write the article as Markdown. Do not write HTML. Do not write a preamble or a closing note.
 

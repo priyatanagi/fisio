@@ -2,6 +2,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 
 import { AppShell } from './app/AppShell';
 import { useHashRoute, navigateTo, type RouteId } from './app/useHashRoute';
+import { useArticleRun } from './app/useArticleRun';
+import { upsertArticle } from './app/articleList';
+import { sanitizePipelineConfig } from './app/pipelineConfig';
 
 import { GenerateView } from './views/GenerateView';
 import { BatchView } from './views/BatchView';
@@ -12,6 +15,7 @@ import { ProvidersView } from './views/ProvidersView';
 import { runMigration } from './db/migrate';
 import { listArticles, putArticle, deleteArticle } from './db';
 import type { GeneratedArticle } from './types/article';
+import type { RunRecord } from './types/run';
 import type { MultiAgentConfig } from './types/provider';
 import { DEFAULT_MULTI_AGENT_CONFIG } from './types/provider';
 import type { UserProfile } from './types/profile';
@@ -30,11 +34,13 @@ function readJson<T>(key: string, fallback: T): T {
   }
 }
 
-function writeJson(key: string, value: unknown): void {
+function writeJson(key: string, value: unknown): boolean {
   try {
     localStorage.setItem(key, JSON.stringify(value));
+    return true;
   } catch (err) {
     console.warn(`Unable to persist ${key}`, err);
+    return false;
   }
 }
 
@@ -51,12 +57,15 @@ export default function App() {
     readJson<UniversalRules>('fitseo_universal_rules', DEFAULT_UNIVERSAL_RULES)
   );
   const [pipelineConfig, setPipelineConfig] = useState<PipelineConfig>(() =>
-    readJson<PipelineConfig>('fitseo_pipeline_config', DEFAULT_PIPELINE_CONFIG)
+    sanitizePipelineConfig(
+      readJson<unknown>('fitseo_pipeline_config', undefined)
+    )
   );
 
   const [articles, setArticles] = useState<GeneratedArticle[]>([]);
   const [isDbLoaded, setIsDbLoaded] = useState(false);
   const [serverStatus, setServerStatus] = useState<'connected' | 'checking' | 'error'>('checking');
+  const [storageWarning, setStorageWarning] = useState<string | null>(null);
 
   const handleSaveProfile = (next: UserProfile) => {
     setProfile(next);
@@ -74,8 +83,13 @@ export default function App() {
   };
 
   const handleSavePipeline = (next: PipelineConfig) => {
-    setPipelineConfig(next);
-    writeJson('fitseo_pipeline_config', next);
+    // A toggle that looks switched off but never reached storage comes back on
+    // the next load, which reads as "the panel ignored me". Show that instead.
+    const sanitized = sanitizePipelineConfig(next);
+    setPipelineConfig(sanitized);
+    if (!writeJson('fitseo_pipeline_config', sanitized)) {
+      setStorageWarning('Pipeline settings could not be saved to this browser, so they reset on reload.');
+    }
   };
 
   useEffect(() => {
@@ -110,8 +124,35 @@ export default function App() {
 
   const handleUpdateArticle = useCallback(async (updated: GeneratedArticle) => {
     await putArticle(updated);
-    setArticles((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
+    // upsert, not map: a first-time article has no id in state yet, and map()
+    // alone dropped every new generation from History until a reload.
+    setArticles((prev) => upsertArticle(prev, updated));
   }, []);
+
+  // The run lives above the router so switching views cannot kill a
+  // generation in progress or wipe the topic that was typed in.
+  const run = useArticleRun({
+    profile,
+    multiAgentConfig,
+    universalRules,
+    pipelineConfig,
+    onArticleSaved: handleUpdateArticle,
+  });
+
+  const handleRetryRun = useCallback(
+    (record: RunRecord) => {
+      navigateTo('generate');
+      void run.retryRun(record);
+    },
+    [run]
+  );
+
+  const handleForgetRun = useCallback(
+    (runId: string) => {
+      void run.forgetRun(runId);
+    },
+    [run]
+  );
 
   // Ctrl/Cmd + 1..5 switch views, mirroring the existing Cmd+1..4 format shortcuts.
   useEffect(() => {
@@ -149,12 +190,15 @@ export default function App() {
       content = (
         <HistoryView
           articles={articles}
+          runs={run.runs}
           isLoaded={isDbLoaded}
           onDelete={handleDeleteArticle}
           onOpen={(article) => {
             sessionStorage.setItem('fisio:openArticleId', article.id);
             navigateTo('generate');
           }}
+          onRetryRun={handleRetryRun}
+          onForgetRun={handleForgetRun}
         />
       );
       break;
@@ -169,12 +213,12 @@ export default function App() {
     default:
       content = (
         <GenerateView
-          {...shared}
+          profile={profile}
+          pipelineConfig={pipelineConfig}
           onPipelineChange={handleSavePipeline}
           articles={articles}
           onUpdateArticle={handleUpdateArticle}
-          error={null}
-          serverStatus={serverStatus}
+          run={run}
         />
       );
   }
@@ -186,6 +230,16 @@ export default function App() {
       profileConfigured={isProfileConfigured(profile)}
       serverStatus={serverStatus}
     >
+      {storageWarning && (
+        <div className="px-4 sm:px-6 lg:px-8 pt-4">
+          <div className="max-w-7xl mx-auto bg-amber-950/80 border border-amber-800 rounded-xl px-4 py-3 flex items-start gap-2.5 text-amber-200 text-xs">
+            <span className="flex-1">{storageWarning}</span>
+            <button onClick={() => setStorageWarning(null)} className="text-amber-400 hover:text-amber-200">
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
       {content}
     </AppShell>
   );

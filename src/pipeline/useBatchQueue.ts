@@ -6,6 +6,7 @@ import type { UniversalRules } from '../config/universalRules';
 import type { MultiAgentConfig } from '../types/provider';
 import type {
   ImpowerLevel,
+  LengthTarget,
   PipelineConfig,
   ReviewerMode,
   ReviewReport,
@@ -257,6 +258,18 @@ export function targetWordsFor(row: BatchRow, job: BatchJob): number {
   }
 }
 
+export function lengthTargetFor(row: BatchRow): LengthTarget {
+  switch (row.targetLength) {
+    case 'short':
+    case 'standard':
+    case 'long':
+    case 'custom':
+      return row.targetLength;
+    default:
+      return 'standard';
+  }
+}
+
 export function useBatchQueue(options: UseBatchQueueOptions): UseBatchQueueResult {
   const [state, dispatch] = useReducer(batchQueueReducer, initialQueueState);
 
@@ -304,6 +317,7 @@ export function useBatchQueue(options: UseBatchQueueOptions): UseBatchQueueResul
       impower: row.impowerOverride || job.globalConfig.impower,
       reviewer: row.reviewerOverride || job.globalConfig.reviewer,
       targetWords: targetWordsFor(row, job),
+      lengthTarget: lengthTargetFor(row),
     };
 
     try {
