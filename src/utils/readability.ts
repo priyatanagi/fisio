@@ -72,17 +72,12 @@ function countIndonesianSyllables(word: string): number {
   return Math.max(1, count);
 }
 
-export function calculateReadability(htmlContent: string, language: 'en' | 'id' | string = 'en'): ReadabilityMetrics {
-  // Strip HTML tags to get raw readable text
-  const text = htmlContent
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
-    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  if (!text) {
+export function readabilityFromText(
+  text: string,
+  language: 'en' | 'id' | string = 'en'
+): ReadabilityMetrics {
+  const clean = (text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) {
     return {
       fleschReadingEase: 0,
       gradeLevel: 0,
@@ -98,8 +93,11 @@ export function calculateReadability(htmlContent: string, language: 'en' | 'id' 
     };
   }
 
+  const isIndo = language.toLowerCase() === 'id';
+  const lowerText = clean.toLowerCase();
+
   // Split into sentences (handles . ! ? followed by space or boundary)
-  const rawSentences = text
+  const rawSentences = clean
     .split(/(?<=[.!?])\s+/)
     .map((s) => s.trim())
     .filter((s) => s.length > 5);
@@ -107,7 +105,7 @@ export function calculateReadability(htmlContent: string, language: 'en' | 'id' 
   const sentenceCount = Math.max(1, rawSentences.length);
 
   // Split into words
-  const words = text
+  const words = clean
     .split(/\s+/)
     .map((w) => w.replace(/[^\w-]/g, '').trim())
     .filter((w) => w.length > 0);
@@ -115,7 +113,6 @@ export function calculateReadability(htmlContent: string, language: 'en' | 'id' 
   const wordCount = Math.max(1, words.length);
 
   // Count syllables
-  const isIndo = language === 'id' || language.startsWith('id');
   let totalSyllables = 0;
   for (const w of words) {
     totalSyllables += isIndo ? countIndonesianSyllables(w) : countEnglishSyllables(w);
@@ -133,7 +130,6 @@ export function calculateReadability(htmlContent: string, language: 'en' | 'id' 
   const shortSentencePercentage = Math.round((shortSentences / sentenceCount) * 100);
 
   // Transition words
-  const lowerText = text.toLowerCase();
   const transitionList = isIndo ? INDONESIAN_TRANSITIONS : ENGLISH_TRANSITIONS;
   let transitionWordCount = 0;
   transitionList.forEach((phrase) => {
@@ -192,4 +188,16 @@ export function calculateReadability(htmlContent: string, language: 'en' | 'id' 
     statusColor,
     isYoastCompliant,
   };
+}
+
+export function calculateReadability(
+  htmlContent: string,
+  language: 'en' | 'id' | string = 'en'
+): ReadabilityMetrics {
+  const text = (htmlContent || '')
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
+    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ');
+  return readabilityFromText(text, language);
 }
