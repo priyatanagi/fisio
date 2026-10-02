@@ -133,15 +133,49 @@ describe('extractDocument', () => {
 
   it('keeps a list block out of the paragraphs and out of the headings, but not out of the text', () => {
     const doc = extractDocument('- satu\n- dua\n- tiga', 'markdown');
+    const rendered = extractDocument('<ul><li>satu</li><li>dua</li><li>tiga</li></ul>', 'html');
     expect(doc.headings).toEqual([]);
     expect(doc.paragraphs).toEqual([]);
+    expect(doc.paragraphs).toEqual(rendered.paragraphs);
     expect(doc.text).toBe('satu dua tiga');
   });
 
-  it('counts a paragraph only when a block has no list line in it', () => {
+  it('leaves a tight list out of the paragraphs of a longer article', () => {
     const doc = extractDocument('Paragraf satu.\n\n- butir\n\nParagraf dua.', 'markdown');
     expect(doc.paragraphs).toEqual(['Paragraf satu.', 'Paragraf dua.']);
     expect(doc.text).toBe('Paragraf satu. butir Paragraf dua.');
+  });
+
+  it('counts each item of a loose list as its own paragraph, the way a renderer wraps it', () => {
+    const doc = extractDocument('- satu\n\n- dua', 'markdown');
+    const rendered = extractDocument('<ul><li><p>satu</p></li><li><p>dua</p></li></ul>', 'html');
+    expect(doc.paragraphs).toEqual(['satu', 'dua']);
+    expect(doc.paragraphs).toEqual(rendered.paragraphs);
+    expect(doc.text).toBe('satu dua');
+  });
+
+  it('gives each wrapped item of a loose list its own paragraph', () => {
+    const doc = extractDocument('- Butir pertama\n  lanjutan butir\n\n- Butir kedua\n  lanjutan lain', 'markdown');
+    expect(doc.paragraphs).toEqual(['Butir pertama lanjutan butir', 'Butir kedua lanjutan lain']);
+  });
+
+  it('separates a tight list from a loose one', () => {
+    const tight = extractDocument('- satu\n- dua', 'markdown');
+    const loose = extractDocument('- satu\n\n- dua', 'markdown');
+    expect(tight.paragraphs).toEqual([]);
+    expect(loose.paragraphs).toEqual(['satu', 'dua']);
+  });
+
+  it('does not let an ordered marker that cannot interrupt a paragraph break it up', () => {
+    const doc = extractDocument('Paragraf.\n2. dua', 'markdown');
+    const rendered = extractDocument('<p>Paragraf. 2. dua</p>', 'html');
+    expect(doc.paragraphs).toHaveLength(1);
+    expect(doc.paragraphs[0]).toContain('Paragraf.');
+    expect(doc.paragraphs).toHaveLength(rendered.paragraphs.length);
+  });
+
+  it('still treats an ordered marker that opens a block as a list', () => {
+    expect(extractDocument('2. dua', 'markdown').paragraphs).toEqual([]);
   });
 
   it('does not let a numbered list stand in for a paragraph either', () => {

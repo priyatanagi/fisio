@@ -195,6 +195,36 @@ Distribusi dilakukan melalui dapur yang dikelola sekolah. Pengambilan dilakukan 
     expect(pass(fromHtml, 'keyphrase_in_p1')).toBe(false);
   });
 
+  it('scores a loose list the same from a draft and from its render', () => {
+    const items = [
+      'Program makan bergizi gratis dibagikan setiap hari kerja. Peserta makan di kelas masing-masing.',
+      'Butir kedua juga dibagikan tepat waktu. Jadwal tidak berubah.',
+    ];
+    const prose = [
+      'Paragraf penutup bagian ini. Semuanya berjalan sesuai rencana.',
+      'Paragraf tambahan bagian ini. Jadwal tetap berjalan setiap hari.',
+    ];
+    const draft =
+      '## Sasaran\n\n' +
+      items.map((i) => `- ${i}`).join('\n\n') +
+      '\n\n' +
+      prose.join('\n\n');
+    const rendered =
+      '<h2>Sasaran</h2><ul>' +
+      items.map((i) => `<li><p>${i}</p></li>`).join('') +
+      '</ul>' +
+      prose.map((p) => `<p>${p}</p>`).join('');
+    const fromDraft = evaluateDraftChecks(extractDocument(draft, 'markdown'), metadata, 'makan bergizi gratis');
+    const fromHtml = evaluateDraftChecks(extractDocument(rendered, 'html'), metadata, 'makan bergizi gratis');
+
+    for (const id of fromDraft.map((i) => i.id)) expect(pass(fromHtml, id)).toBe(pass(fromDraft, id));
+
+    for (const id of ['keyphrase_in_p1', 'h2_paragraph_rule', 'paragraph_depth']) {
+      expect(pass(fromDraft, id)).toBe(true);
+      expect(pass(fromHtml, id)).toBe(true);
+    }
+  });
+
   it('sees a setext h1 in a draft as the h1 it renders to', () => {
     const draft = 'Judul Artikel\n==============\n\nParagraf pembuka artikel.';
     const rendered = '<h1>Judul Artikel</h1><p>Paragraf pembuka artikel.</p>';

@@ -14,11 +14,13 @@ const FENCED_CODE = /(`{3,})[\s\S]*?(?:\1|$)/g;
 
 const THEMATIC_BREAK = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/gm;
 
-/** Mirrors the markers markdownToPlainText strips, so a block is known to be a list. */
-const LIST_LINE = /^\s{0,3}(?:[-*+]|\d+\.)\s+/;
+/** Mirrors the markers markdownToPlainText strips. A block opening with one is list content. */
+const LIST_MARKER = /^\s{0,3}(?:[-*+]|\d+\.)\s+/;
 
 /** A run of = or - under a line of text closes that line into a setext heading. */
 const SETEXT_UNDERLINE = /^\s{0,3}(=+|-+)\s*$/;
+
+const isListItemLine = (line: string): boolean => LIST_MARKER.test(line);
 
 const FAQ_WORDS = /faq|accordion|question|pertanyaan|tanya/i;
 
@@ -73,15 +75,35 @@ function extractMarkdownParts(markdown: string): {
   const headings: { level: number; text: string }[] = [];
   const paragraphs: string[] = [];
   const corpus: string[] = [];
-  const blocks = markdown.replace(FENCED_CODE, ' ').split(/\n\s*\n/);
+  const chunks = markdown
+    .replace(FENCED_CODE, ' ')
+    .split(/\n\s*\n/)
+    .map((block) => block.split('\n'));
 
-  const addProse = (lines: string[]): void => {
+  const addParagraph = (lines: string[]): void => {
     const prose = markdownToPlainText(lines.join('\n'));
     if (!prose) return;
+    paragraphs.push(prose);
     corpus.push(prose);
-    // A list renders as <li>, never <p>, so counting it as a paragraph would let a draft
-    // clear a paragraph check that its own render then fails.
-    if (!lines.some((line) => LIST_LINE.test(line))) paragraphs.push(prose);
+  };
+
+  /** A tight list renders as bare <li>, so its words are read but never form a paragraph. */
+  const addListWords = (lines: string[]): void => {
+    const prose = markdownToPlainText(lines.join('\n'));
+    if (prose) corpus.push(prose);
+  };
+
+  /** A loose list wraps each item's content in <p>, so every item is one paragraph. */
+  const addLooseItems = (lines: string[]): void => {
+    let item: string[] = [];
+    for (const line of lines) {
+      if (isListItemLine(line) && item.length > 0) {
+        addParagraph(item);
+        item = [];
+      }
+      item.push(line);
+    }
+    if (item.length > 0) addParagraph(item);
   };
 
   const addHeading = (level: number, source: string): void => {
@@ -90,30 +112,54 @@ function extractMarkdownParts(markdown: string): {
     if (prose) corpus.push(prose);
   };
 
-  for (const block of blocks) {
+  const isBlank = (lines: string[]): boolean => lines.every((line) => !line.trim());
+
+  for (let i = 0; i < chunks.length; ) {
+    const lines = chunks[i];
+    if (isBlank(lines)) {
+      i += 1;
+      continue;
+    }
+
+    // A block opening with a list marker is list content; consecutive such blocks are one list,
+    // and a blank line between its items is what makes it loose.
+    if (isListItemLine(lines[0])) {
+      const list: string[][] = [lines];
+      let next = i + 1;
+      while (next < chunks.length && !isBlank(chunks[next]) && isListItemLine(chunks[next][0])) {
+        list.push(chunks[next]);
+        next += 1;
+      }
+      i = next;
+      const loose = list.length > 1;
+      for (const item of list) (loose ? addLooseItems : addListWords)(item);
+      continue;
+    }
+
+    i += 1;
     let body: string[] = [];
-    for (const line of block.split('\n')) {
+    for (const line of lines) {
       const atx = line.match(/^\s{0,3}(#{1,6})\s+(.*)$/);
       const setext =
-        !atx && body.length > 0 && !LIST_LINE.test(body[body.length - 1])
+        !atx && body.length > 0 && !isListItemLine(body[body.length - 1])
           ? line.match(SETEXT_UNDERLINE)
           : null;
 
       if (atx) {
-        addProse(body);
+        addParagraph(body);
         body = [];
         addHeading(atx[1].length, atx[2]);
       } else if (setext) {
         const title = body[body.length - 1];
         body = body.slice(0, -1);
-        addProse(body);
+        addParagraph(body);
         body = [];
         addHeading(setext[1].startsWith('=') ? 1 : 2, title);
       } else {
         body.push(line);
       }
     }
-    addProse(body);
+    addParagraph(body);
   }
 
   return { text: corpus.join(' '), headings, paragraphs };
