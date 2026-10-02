@@ -22,7 +22,7 @@ const englishMetadata: SeoMetadata = {
   tags: ['school'],
 };
 
-/** Every check this text can be judged on passes except Flesch, which Indonesian prose cannot reach. */
+/** Passes 15 of 16. The measurer counts vowel groups, which puts Indonesian prose far under the Flesch band. */
 const compliant = `## Apa Itu Program Makan Bergizi Gratis?
 
 Program makan bergizi gratis adalah program yang memberi makan siang gratis kepada anak di sekolah. Program ini berjalan dari hari Senin sampai Jumat, dan tidak ada biaya yang dipungut dari orang tua. Dapur makanan ada di dalam sekolah, sehingga makanan bisa langsung diantar ke kelas.
@@ -124,6 +124,7 @@ describe('scoreDraft', () => {
     const score = scoreDraft(compliant, metadata, 'makan bergizi gratis', 900, 'id', 85);
     expect(score.total).toBeGreaterThanOrEqual(85);
     expect(score.passed).toBe(true);
+    /** The 60-70 band is the only one an Indonesian draft of natural sentence length misses. */
     expect(score.failed.map((c) => c.id)).toEqual(['flesch_range']);
   });
 
