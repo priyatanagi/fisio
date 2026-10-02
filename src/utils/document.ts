@@ -15,12 +15,21 @@ const FENCED_CODE = /(`{3,})[\s\S]*?(?:\1|$)/g;
 const THEMATIC_BREAK = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/gm;
 
 /** Mirrors the markers markdownToPlainText strips. A block opening with one is list content. */
-const LIST_MARKER = /^\s{0,3}(?:[-*+]|\d+\.)\s+/;
+const LIST_MARKER = /^\s{0,3}(?:[-*+]|\d+[.)])\s+/;
+
+const ATX_HEADING = /^\s{0,3}(#{1,6})\s+(.*)$/;
 
 /** A run of = or - under a line of text closes that line into a setext heading. */
 const SETEXT_UNDERLINE = /^\s{0,3}(=+|-+)\s*$/;
 
 const isListItemLine = (line: string): boolean => LIST_MARKER.test(line);
+
+/** `-`, `*` and `+` each open their own list, as do `.` and `)` runs of numbers. */
+function listMarkerKind(line: string): string {
+  const marker = line.match(/^\s{0,3}([-*+]|\d+[.)])\s+/);
+  if (!marker) return '';
+  return /\d/.test(marker[1]) ? marker[1].slice(-1) : marker[1];
+}
 
 const FAQ_WORDS = /faq|accordion|question|pertanyaan|tanya/i;
 
@@ -61,7 +70,7 @@ export function markdownToPlainText(markdown: string): string {
     .replace(/^\s{0,3}#{1,6}\s+/gm, '')
     .replace(/^\s{0,3}>\s?/gm, '')
     .replace(/^\s{0,3}[-*+]\s+/gm, '')
-    .replace(/^\s{0,3}\d+\.\s+/gm, '')
+    .replace(/^\s{0,3}\d+[.)]\s+/gm, '')
     .replace(/(\*\*|__|\*|_)/g, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -114,32 +123,23 @@ function extractMarkdownParts(markdown: string): {
 
   const isBlank = (lines: string[]): boolean => lines.every((line) => !line.trim());
 
-  for (let i = 0; i < chunks.length; ) {
-    const lines = chunks[i];
-    if (isBlank(lines)) {
-      i += 1;
-      continue;
+  /**
+   * The leading lines a list claims: its items plus the lines that continue them. An ATX heading
+   * interrupts a paragraph and so ends the list; a setext underline cannot and does not.
+   */
+  const takeListLines = (lines: string[]): string[] => {
+    let count = 0;
+    while (count < lines.length && !ATX_HEADING.test(lines[count])) {
+      if (count > 0 || isListItemLine(lines[count])) count += 1;
+      else break;
     }
+    return lines.slice(0, count);
+  };
 
-    // A block opening with a list marker is list content; consecutive such blocks are one list,
-    // and a blank line between its items is what makes it loose.
-    if (isListItemLine(lines[0])) {
-      const list: string[][] = [lines];
-      let next = i + 1;
-      while (next < chunks.length && !isBlank(chunks[next]) && isListItemLine(chunks[next][0])) {
-        list.push(chunks[next]);
-        next += 1;
-      }
-      i = next;
-      const loose = list.length > 1;
-      for (const item of list) (loose ? addLooseItems : addListWords)(item);
-      continue;
-    }
-
-    i += 1;
+  const addHeadingsAndProse = (lines: string[]): void => {
     let body: string[] = [];
     for (const line of lines) {
-      const atx = line.match(/^\s{0,3}(#{1,6})\s+(.*)$/);
+      const atx = line.match(ATX_HEADING);
       const setext =
         !atx && body.length > 0 && !isListItemLine(body[body.length - 1])
           ? line.match(SETEXT_UNDERLINE)
@@ -160,6 +160,38 @@ function extractMarkdownParts(markdown: string): {
       }
     }
     addParagraph(body);
+  };
+
+  for (let i = 0; i < chunks.length; ) {
+    const chunk = chunks[i];
+    i += 1;
+    if (isBlank(chunk)) continue;
+
+    // A block opening with a list marker is list content; consecutive such blocks sharing a marker
+    // are one list, and a blank line between its items is what makes it loose. A heading between
+    // two items is content of its own and ends the list there.
+    if (isListItemLine(chunk[0])) {
+      const kind = listMarkerKind(chunk[0]);
+      const items: string[][] = [];
+      let tail: string[] = [];
+      let block = chunk;
+      for (;;) {
+        const item = takeListLines(block);
+        items.push(item);
+        tail = block.slice(item.length);
+        if (!isBlank(tail)) break;
+        const next = i < chunks.length ? chunks[i] : null;
+        if (!next || isBlank(next) || listMarkerKind(next[0]) !== kind) break;
+        block = next;
+        i += 1;
+      }
+      const loose = items.length > 1;
+      for (const item of items) (loose ? addLooseItems : addListWords)(item);
+      if (!isBlank(tail)) addHeadingsAndProse(tail);
+      continue;
+    }
+
+    addHeadingsAndProse(chunk);
   }
 
   return { text: corpus.join(' '), headings, paragraphs };

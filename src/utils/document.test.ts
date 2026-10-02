@@ -178,6 +178,51 @@ describe('extractDocument', () => {
     expect(extractDocument('2. dua', 'markdown').paragraphs).toEqual([]);
   });
 
+  it('reads an atx heading that follows list items in the same block', () => {
+    const doc = extractDocument('- satu\n## Judul', 'markdown');
+    const rendered = extractDocument('<ul><li>satu</li></ul><h2>Judul</h2>', 'html');
+    expect(doc.headings).toEqual([{ level: 2, text: 'Judul' }]);
+    expect(doc.headings).toEqual(rendered.headings);
+    expect(doc.paragraphs).toEqual([]);
+    expect(doc.text).toBe('satu Judul');
+  });
+
+  it('reads an atx heading that follows the items of a loose list', () => {
+    const doc = extractDocument('- satu\n\n- dua\n## Judul', 'markdown');
+    const rendered =
+      extractDocument('<ul><li><p>satu</p></li><li><p>dua</p></li></ul><h2>Judul</h2>', 'html');
+    expect(doc.headings).toEqual([{ level: 2, text: 'Judul' }]);
+    expect(doc.headings).toEqual(rendered.headings);
+    expect(doc.paragraphs).toEqual(['satu', 'dua']);
+    expect(doc.paragraphs).toEqual(rendered.paragraphs);
+  });
+
+  it('does not let a setext underline close a heading onto a list item', () => {
+    const doc = extractDocument('- satu\nJudul\n======', 'markdown');
+    expect(doc.headings).toEqual([]);
+  });
+
+  it('ends a list when a heading sits between its items', () => {
+    const doc = extractDocument('- satu\n## Judul\n\n- dua', 'markdown');
+    const rendered = extractDocument('<ul><li>satu</li></ul><h2>Judul</h2><ul><li>dua</li></ul>', 'html');
+    expect(doc.headings).toEqual(rendered.headings);
+    expect(doc.paragraphs).toEqual([]);
+    expect(doc.paragraphs).toEqual(rendered.paragraphs);
+  });
+
+  it('does not join two lists that use different markers', () => {
+    expect(extractDocument('- satu\n\n* dua', 'markdown').paragraphs).toEqual([]);
+    expect(extractDocument('- a\n- b\n\n* c', 'markdown').paragraphs).toEqual([]);
+  });
+
+  it('does not join an ordered list to one that uses a different delimiter', () => {
+    expect(extractDocument('1. satu\n\n1) dua', 'markdown').paragraphs).toEqual([]);
+  });
+
+  it('still joins items separated by more than one blank line into one loose list', () => {
+    expect(extractDocument('- satu\n\n\n- dua', 'markdown').paragraphs).toEqual(['satu', 'dua']);
+  });
+
   it('does not let a numbered list stand in for a paragraph either', () => {
     const doc = extractDocument('1. satu\n2. dua', 'markdown');
     expect(doc.paragraphs).toEqual([]);

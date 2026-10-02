@@ -225,6 +225,32 @@ Distribusi dilakukan melalui dapur yang dikelola sekolah. Pengambilan dilakukan 
     }
   });
 
+  it('reads a heading that follows list items the same from a draft and its render', () => {
+    const first = 'Butir pertama Program makan bergizi gratis.';
+    const second = 'Butir kedua Program makan bergizi gratis.';
+    const tightDraft = `- ${first}\n## Sasaran Makan Bergizi Gratis\n## Mekanisme Distribusi`;
+    const looseDraft = `- ${first}\n\n- ${second}\n## Sasaran Makan Bergizi Gratis\n## Mekanisme Distribusi`;
+    const tightRender =
+      `<ul><li>${first}</li></ul><h2>Sasaran Makan Bergizi Gratis</h2><h2>Mekanisme Distribusi</h2>`;
+    const looseRender =
+      `<ul><li><p>${first}</p></li><li><p>${second}</p></li></ul>` +
+      `<h2>Sasaran Makan Bergizi Gratis</h2><h2>Mekanisme Distribusi</h2>`;
+
+    for (const [draft, rendered] of [
+      [tightDraft, tightRender],
+      [looseDraft, looseRender],
+    ]) {
+      const fromDraft = evaluateDraftChecks(extractDocument(draft, 'markdown'), metadata, 'makan bergizi gratis');
+      const fromHtml = evaluateDraftChecks(extractDocument(rendered, 'html'), metadata, 'makan bergizi gratis');
+
+      for (const id of fromDraft.map((i) => i.id)) expect(pass(fromHtml, id)).toBe(pass(fromDraft, id));
+      for (const id of ['keyphrase_in_headings', 'heading_structure']) {
+        expect(pass(fromDraft, id)).toBe(true);
+        expect(pass(fromHtml, id)).toBe(true);
+      }
+    }
+  });
+
   it('sees a setext h1 in a draft as the h1 it renders to', () => {
     const draft = 'Judul Artikel\n==============\n\nParagraf pembuka artikel.';
     const rendered = '<h1>Judul Artikel</h1><p>Paragraf pembuka artikel.</p>';
