@@ -134,6 +134,8 @@ export function evaluateDraftChecks(
       description: 'A click-magnet headline is required for the article header.',
       passed: Boolean(headline.trim().length > 10),
       value: headline || 'missing',
+      recommendation:
+        headline.trim().length > 10 ? undefined : 'Write a headline longer than 10 characters',
     },
     {
       id: 'meta_desc_length',
@@ -155,6 +157,10 @@ export function evaluateDraftChecks(
       description: 'The primary phrase must appear in the meta description.',
       passed: Boolean(lowerKeyphrase && metaDescription.toLowerCase().includes(lowerKeyphrase)),
       value: lowerKeyphrase || 'no keyphrase set',
+      recommendation:
+        lowerKeyphrase && !metaDescription.toLowerCase().includes(lowerKeyphrase)
+          ? `Insert "${keyphrase}" in the meta description`
+          : undefined,
     },
     {
       id: 'focus_keyphrase_length',
@@ -163,6 +169,10 @@ export function evaluateDraftChecks(
       description: 'Overly long keyphrases never match real queries.',
       passed: keyphrase.length > 0 && keyphrase.length <= 25,
       value: `${keyphrase.length}/25 characters`,
+      recommendation:
+        keyphrase.length > 0 && keyphrase.length <= 25
+          ? undefined
+          : 'Set a focus keyphrase of 25 characters or fewer',
     },
     {
       id: 'keyphrase_in_p1',
@@ -183,6 +193,10 @@ export function evaluateDraftChecks(
       description: 'Subheadings reinforce topical relevance.',
       passed: Boolean(lowerKeyphrase && headingText.includes(lowerKeyphrase)),
       value: headingText ? headingText.slice(0, 60) : 'no headings',
+      recommendation:
+        lowerKeyphrase && !headingText.includes(lowerKeyphrase)
+          ? `Include "${keyphrase}" in at least one H2 or H3 heading`
+          : undefined,
     },
     {
       id: 'keyphrase_density',
@@ -213,6 +227,7 @@ export function evaluateDraftChecks(
       description: 'Subheadings break the article into scannable sections.',
       passed: h2Count >= 2,
       value: `${h2Count} H2 heading(s)`,
+      recommendation: h2Count >= 2 ? undefined : 'Add 2 or more H2 subheadings',
     },
     {
       id: 'h2_paragraph_rule',
@@ -225,6 +240,8 @@ export function evaluateDraftChecks(
         : h2Counts.length === 0
           ? 'No H2 headings found'
           : `One or more H2s has only ${shallowestH2} paragraph${shallowestH2 === 1 ? '' : 's'}`,
+      recommendation:
+        allH2HaveMultipleP ? undefined : 'Write at least 2 paragraphs under every H2',
     },
     {
       id: 'paragraph_depth',
@@ -237,6 +254,10 @@ export function evaluateDraftChecks(
         : doc.paragraphs.length < 4
           ? `Only ${doc.paragraphs.length} paragraphs found`
           : 'Shallow single-sentence paragraphs detected',
+      recommendation:
+        hasWellFormedParagraphs
+          ? undefined
+          : 'Write at least 4 paragraphs of 2 or more sentences each',
     },
     {
       id: 'statistical_eeat',
@@ -245,6 +266,10 @@ export function evaluateDraftChecks(
       description: 'Emphasizes concrete metrics (ROI %, retention %) in bold or a callout.',
       passed: doc.hasStrongFigure,
       value: doc.hasStrongFigure ? 'Highlighted Statistics Present' : 'No highlighted statistical figures',
+      recommendation:
+        doc.hasStrongFigure
+          ? undefined
+          : 'Bold a concrete figure, for example **30%**, or place it in a callout',
     },
   ];
 }

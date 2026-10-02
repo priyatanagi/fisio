@@ -21,7 +21,15 @@ export interface ArticleScore {
   flesch: number;
   wordCount: number;
   wordTarget: number;
+  /** The denominator `total` was taken over: `checks.length` less the unavailable ones. */
+  scoredCount: number;
   checks: ScoredCheck[];
+  /**
+   * The scored checks that did not pass. This is a subset of `checks.filter(c => !c.passed)`,
+   * never equal to it: an `unavailable` check still reports `passed: false`, because the band
+   * was not met, yet is absent here because it was never counted. Do not "fix" this by
+   * dropping the availability filter, and do not soften `passed` to compensate.
+   */
   failed: ScoredCheck[];
 }
 
@@ -36,7 +44,7 @@ export const WORD_COUNT_TOLERANCE = 0.2;
  * The two coefficients are copied from the formula in `readabilityFromText`; that file owns
  * the calculation and is not ours to change, so a change there has to be mirrored here.
  */
-function fleschCeiling(readability: ReadabilityMetrics): number {
+export function fleschCeiling(readability: ReadabilityMetrics): number {
   const syllablesPerWord = readability.syllableCount / Math.max(1, readability.wordCount);
   return Math.round((206.835 - 84.6 * syllablesPerWord) * 10) / 10;
 }
@@ -95,6 +103,7 @@ export function scoreDraft(
     flesch: readability.fleschReadingEase,
     wordCount,
     wordTarget: targetWords,
+    scoredCount: scored.length,
     checks,
     failed: checks.filter((c) => !c.passed && !c.unavailable),
   };
@@ -103,7 +112,10 @@ export function scoreDraft(
 /** Instruction lines for the next revision. Never names a check that passed or unreachable. */
 export function formatFailedChecks(score: ArticleScore): string {
   if (score.failed.length === 0) return '';
-  const lines = score.failed.map((c) => `- [${c.id}] ${c.title}: measured "${c.actual}", required ${c.expected}.`);
+  const lines = score.failed.map((c) => {
+    const expected = c.expected.replace(/\.+$/, '');
+    return `- [${c.id}] ${c.title}: measured "${c.actual}", required ${expected}.`;
+  });
   return [
     `These measured checks failed (score ${score.total}/100, target ${score.target}). Fix each one and change nothing else:`,
     ...lines,

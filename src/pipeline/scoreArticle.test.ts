@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { scoreDraft, formatFailedChecks } from './scoreArticle';
+import { scoreDraft, formatFailedChecks, fleschCeiling, type ScoredCheck } from './scoreArticle';
+import { extractDocument } from '../utils/document';
+import { readabilityFromText } from '../utils/readability';
 import type { SeoMetadata } from '../types/article';
 
 const metadata: SeoMetadata = {
@@ -119,6 +121,12 @@ Parents only need to inform the teacher when a child is unwell or away for the d
 The school also keeps a written record of every serving day, and that record is available to any parent who wants to inspect it. If a meal is ever late, the teacher tells the kitchen manager and the kitchen adjusts its timing for the following day.
 `;
 
+/** Formal vocabulary, so the corpus ceiling lands inside the band rather than far above it. */
+const midBand = `## Meal Provision
+
+Each school obtains a monthly allocation of nutrition for the children in its care. The local authority pays for the kitchen staff and for every ingredient that goes into each meal. A record of what was served is retained throughout each academic term, and that record is available for external verification. Pupils are registered at the start of the break, and the total determines how much food the kitchen prepares each morning. Instructors submit any variation to the administration, and the office forwards it to the department that runs the programme.
+`;
+
 describe('scoreDraft', () => {
   it('scores a compliant draft above the target', () => {
     const score = scoreDraft(compliant, metadata, 'makan bergizi gratis', 900, 'id', 85);
@@ -178,6 +186,7 @@ describe('scoreDraft', () => {
   it('reaches 16 of 16 on a draft that satisfies every check', () => {
     const score = scoreDraft(compliantEn, englishMetadata, 'school lunch', 500, 'en', 85);
     expect(score.total).toBe(100);
+    expect(score.scoredCount).toBe(16);
     expect(score.failed).toHaveLength(0);
     expect(score.checks.filter((c) => c.unavailable)).toHaveLength(0);
   });
@@ -191,7 +200,33 @@ describe('scoreDraft', () => {
     expect(band?.expected).toBe('60-70 is unreachable for this corpus; maximum possible is 14.2');
     expect(score.checks.filter((c) => c.unavailable)).toHaveLength(1);
     expect(score.checks.filter((c) => !c.unavailable)).toHaveLength(15);
+    expect(score.scoredCount).toBe(15);
     expect(score.failed.map((c) => c.id)).not.toContain('flesch_range');
+  });
+
+  it('scores against the keyphrase argument when the metadata carries none', () => {
+    const withoutMetadata: SeoMetadata = { ...metadata, focusKeyphrase: '' };
+    const score = scoreDraft(compliant, withoutMetadata, 'makan bergizi gratis', 900, 'id', 85);
+    expect(score.checks.find((c) => c.id === 'keyphrase_in_p1')?.passed).toBe(true);
+    expect(score.checks.find((c) => c.id === 'seo_title_keyphrase')?.passed).toBe(true);
+    expect(score.checks.find((c) => c.id === 'keyphrase_in_headings')?.passed).toBe(true);
+    expect(score.total).toBe(100);
+  });
+
+  it('scores against the keyphrase argument even when the metadata names another', () => {
+    const score = scoreDraft(compliant, metadata, 'program dinekin', 900, 'id', 85);
+    expect(score.checks.find((c) => c.id === 'keyphrase_in_p1')?.passed).toBe(false);
+    expect(score.checks.find((c) => c.id === 'seo_title_keyphrase')?.passed).toBe(false);
+    expect(score.checks.find((c) => c.id === 'meta_desc_keyphrase')?.passed).toBe(false);
+    expect(score.checks.find((c) => c.id === 'keyphrase_in_headings')?.passed).toBe(false);
+    expect(score.checks.find((c) => c.id === 'keyphrase_density')?.passed).toBe(false);
+  });
+
+  it('judges every keyphrase check as unmet when neither the argument nor the metadata has one', () => {
+    const score = scoreDraft(compliant, { ...metadata, focusKeyphrase: '' }, '', 900, 'id', 85);
+    for (const id of ['keyphrase_in_p1', 'keyphrase_in_headings', 'keyphrase_density', 'seo_title_keyphrase']) {
+      expect(score.checks.find((c) => c.id === id)?.passed, id).toBe(false);
+    }
   });
 
   it('scores the Flesch band normally when the corpus can reach it', () => {
@@ -201,6 +236,16 @@ describe('scoreDraft', () => {
     expect(band?.passed).toBe(true);
     expect(band?.expected).toBe('between 60 and 70');
     expect(band?.actual).toBe(String(score.flesch));
+  });
+
+  it('scores the Flesch band when the corpus ceiling lands inside the band', () => {
+    const ceiling = fleschCeiling(
+      readabilityFromText(extractDocument(midBand, 'markdown').text, 'en')
+    );
+    expect(ceiling).toBeGreaterThanOrEqual(60);
+    expect(ceiling).toBeLessThan(70);
+    const score = scoreDraft(midBand, englishMetadata, 'school lunch', 60, 'en', 85);
+    expect(score.checks.find((c) => c.id === 'flesch_range')?.unavailable).toBeUndefined();
   });
 
   it('keeps an empty draft failing the Flesch band instead of excusing it', () => {
@@ -228,6 +273,39 @@ describe('formatFailedChecks', () => {
     const score = scoreDraft(poor, metadata, 'makan bergizi gratis', 900, 'id', 85);
     expect(score.checks.find((c) => c.id === 'flesch_range')?.unavailable).toBe(true);
     expect(formatFailedChecks(score)).not.toContain('flesch_range');
+  });
+
+  it('tells the writer what to change, not what the rule is', () => {
+    const score = scoreDraft(poor, metadata, 'makan bergizi gratis', 900, 'id', 85);
+    const text = formatFailedChecks(score);
+    expect(text).not.toContain('..');
+    expect(text).toContain('required Write at least 4 paragraphs of 2 or more sentences each.');
+    expect(text).toContain('required Write at least 2 paragraphs under every H2.');
+    expect(text).not.toContain('Prohibits shallow');
+  });
+
+  it('ends each instruction with one period even when the rule text ends with one', () => {
+    const rule = 'Prohibits shallow single-sentence paragraphs for dwell time.';
+    const check: ScoredCheck = {
+      id: 'paragraph_depth',
+      title: 'Paragraph Depth',
+      passed: false,
+      actual: 'Only 2 paragraphs found',
+      expected: rule,
+    };
+    const text = formatFailedChecks({
+      total: 50,
+      target: 85,
+      passed: false,
+      flesch: 0,
+      wordCount: 0,
+      wordTarget: 900,
+      scoredCount: 1,
+      checks: [check],
+      failed: [check],
+    });
+    expect(text).toContain(`required ${rule}`);
+    expect(text).not.toContain('..');
   });
 
   it('returns an empty string when nothing failed', () => {

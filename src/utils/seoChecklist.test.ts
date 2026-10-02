@@ -303,6 +303,36 @@ Distribusi dilakukan melalui dapur yang dikelola sekolah. Pengambilan dilakukan 
       'One or more H2s has only 1 paragraph'
     );
   });
+
+  it('tells the writer what to change for every check that had no instruction', () => {
+    const weak: SeoMetadata = {
+      seoTitle: 'Panduan Program Makan Bergizi Gratis',
+      headline: 'X',
+      focusKeyphrase: 'makan bergizi gratis dan bergizi gratis lagi',
+      metaDescription: 'Ulasan singkat tentang program makan siang di sekolah.',
+      urlSlug: 'program',
+      tags: [],
+    };
+    const draft = '# Judul\n\n## Sub\n\nKalimat pendek.';
+    const items = evaluateDraftChecks(extractDocument(draft, 'markdown'), weak, weak.focusKeyphrase);
+
+    const named = [
+      'headline_present',
+      'meta_desc_keyphrase',
+      'focus_keyphrase_length',
+      'keyphrase_in_headings',
+      'heading_structure',
+      'h2_paragraph_rule',
+      'paragraph_depth',
+      'statistical_eeat',
+    ];
+    for (const id of named) {
+      const item = items.find((i) => i.id === id);
+      expect(item?.passed, id).toBe(false);
+      expect(item?.recommendation, id).toBeTruthy();
+      expect(item?.recommendation, id).not.toMatch(/\.$/);
+    }
+  });
 });
 
 describe('evaluateHtmlChecks', () => {
