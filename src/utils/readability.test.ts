@@ -31,4 +31,13 @@ describe('readabilityFromText', () => {
     // Markdown markup must not reach the measurement.
     expect(readabilityFromText(markdown.replace(/^#+.*$/gm, ''), 'en')).toEqual(stripped);
   });
+
+  it('counts syllables as Indonesian for a regional language tag', () => {
+    const text =
+      'Pemilik gym komersial harus tahu biaya kepemilikan total selama sepuluh tahun. ' +
+      'Namun banyak pembeli hanya fokus pada biaya bulanan.';
+    const base = readabilityFromText(text, 'id');
+    expect(base.syllableCount).toBeGreaterThan(0);
+    expect(readabilityFromText(text, 'id-ID')).toEqual(base);
+  });
 });

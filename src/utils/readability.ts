@@ -93,7 +93,7 @@ export function readabilityFromText(
     };
   }
 
-  const isIndo = language.toLowerCase() === 'id';
+  const isIndo = language === 'id' || language.startsWith('id');
   const lowerText = clean.toLowerCase();
 
   // Split into sentences (handles . ! ? followed by space or boundary)
