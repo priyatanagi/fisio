@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractDocument, markdownToPlainText } from './document';
+import { containsStrongFigure, extractDocument, markdownToPlainText } from './document';
 
 const markdown = `# Judul Utama
 
@@ -34,6 +34,15 @@ describe('markdownToPlainText', () => {
   it('returns an empty string for empty input', () => {
     expect(markdownToPlainText('')).toBe('');
     expect(markdownToPlainText('   \n  ')).toBe('');
+  });
+
+  it('removes a four-backtick fence without leaking the code inside it', () => {
+    const source = '````\n```\nbaris dalam kode\n```\n````\n\nParagraf.';
+    expect(markdownToPlainText(source)).toBe('Paragraf.');
+  });
+
+  it('removes an unclosed final fence', () => {
+    expect(markdownToPlainText('Paragraf.\n\n```\nkode yang bocor')).toBe('Paragraf.');
   });
 });
 
@@ -100,5 +109,80 @@ describe('extractDocument', () => {
     expect(doc.text).toBe('');
     expect(doc.headings).toEqual([]);
     expect(doc.paragraphs).toEqual([]);
+  });
+
+  it('returns plain prose for markdown headings, matching the html path', () => {
+    const draft = '## **Judul** dan [tautan](https://example.com)\n\nParagraf.';
+    const rendered =
+      '<h2><strong>Judul</strong> dan <a href="https://example.com">tautan</a></h2><p>Paragraf.</p>';
+    const fromMarkdown = extractDocument(draft, 'markdown');
+    const fromHtml = extractDocument(rendered, 'html');
+    expect(fromMarkdown.headings).toEqual([{ level: 2, text: 'Judul dan tautan' }]);
+    expect(fromMarkdown.headings).toEqual(fromHtml.headings);
+  });
+
+  it('keeps a heading that is immediately followed by prose', () => {
+    const doc = extractDocument('# Judul\nTeks langsung.\n\n## Sub\nParagraf kedua.', 'markdown');
+    expect(doc.headings).toEqual([
+      { level: 1, text: 'Judul' },
+      { level: 2, text: 'Sub' },
+    ]);
+    expect(doc.paragraphs).toEqual(['Teks langsung.', 'Paragraf kedua.']);
+    expect(doc.text).toBe('Judul Teks langsung. Sub Paragraf kedua.');
+  });
+
+  it('treats a list block as one paragraph and not as headings', () => {
+    const doc = extractDocument('- satu\n- dua\n- tiga', 'markdown');
+    expect(doc.headings).toEqual([]);
+    expect(doc.paragraphs).toEqual(['satu dua tiga']);
+    expect(doc.text).toBe('satu dua tiga');
+  });
+
+  it('drops a horizontal rule and an image-only block instead of counting them as paragraphs', () => {
+    const doc = extractDocument('Paragraf satu.\n\n---\n\nParagraf dua.', 'markdown');
+    expect(doc.paragraphs).toEqual(['Paragraf satu.', 'Paragraf dua.']);
+    expect(doc.text).toBe('Paragraf satu. Paragraf dua.');
+
+    const withImage = extractDocument(
+      'Paragraf satu.\n\n![Gambar satu](https://example.com/a.jpg)',
+      'markdown'
+    );
+    expect(withImage.paragraphs).toEqual(['Paragraf satu.']);
+  });
+
+  it('gives a draft the same faq and strong-figure verdict as its render', () => {
+    const draft = '## Pertanyaan Umum\n\nHasilnya **40%** lebih baik.';
+    const rendered =
+      '<h2>Pertanyaan Umum</h2><p>Hasilnya <strong>40%</strong> lebih baik.</p>';
+    const fromMarkdown = extractDocument(draft, 'markdown');
+    const fromHtml = extractDocument(rendered, 'html');
+    expect(fromMarkdown.hasFaqSignal).toBe(true);
+    expect(fromMarkdown.hasStrongFigure).toBe(true);
+    expect(fromMarkdown.hasFaqSignal).toBe(fromHtml.hasFaqSignal);
+    expect(fromMarkdown.hasStrongFigure).toBe(fromHtml.hasStrongFigure);
+  });
+
+  it('reads a strong figure out of inline html inside a draft', () => {
+    const draft = extractDocument('Hasilnya <strong>40%</strong> lebih baik.', 'markdown');
+    const rendered = extractDocument('<p>Hasilnya <strong>40%</strong> lebih baik.</p>', 'html');
+    expect(draft.hasStrongFigure).toBe(true);
+    expect(draft.hasStrongFigure).toBe(rendered.hasStrongFigure);
+  });
+
+  it('reports no faq or strong figure for a draft that has neither', () => {
+    const doc = extractDocument('# Judul\n\nParagraf biasa tanpa angka.', 'markdown');
+    expect(doc.hasFaqSignal).toBe(false);
+    expect(doc.hasStrongFigure).toBe(false);
+  });
+
+  it('shares one strong-figure rule between drafts and rendered html', () => {
+    expect(containsStrongFigure('<strong>40%</strong>')).toBe(true);
+    expect(containsStrongFigure('**40%**')).toBe(true);
+    expect(containsStrongFigure('<b>40%</b>')).toBe(true);
+    expect(containsStrongFigure('<aside>Catatan</aside>')).toBe(true);
+    expect(containsStrongFigure('<strong>\n40%\n</strong>')).toBe(true);
+    expect(containsStrongFigure('<strong>tebal</strong>')).toBe(false);
+    expect(containsStrongFigure('**tebal**')).toBe(false);
+    expect(containsStrongFigure('Teks biasa.')).toBe(false);
   });
 });
