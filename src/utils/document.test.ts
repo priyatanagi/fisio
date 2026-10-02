@@ -69,6 +69,24 @@ describe('extractDocument', () => {
     expect(doc.html).toBe(html);
   });
 
+  it('measures the same corpus from a markdown draft and its rendered html', () => {
+    const draft = '# Judul Utama\n\nParagraf pertama.\n\n## Sub Judul\n\nParagraf kedua.';
+    const rendered =
+      '<h1>Judul Utama</h1><p>Paragraf pertama.</p><h2>Sub Judul</h2><p>Paragraf kedua.</p>';
+    const fromMarkdown = extractDocument(draft, 'markdown');
+    const fromHtml = extractDocument(rendered, 'html');
+
+    for (const text of [fromMarkdown.text, fromHtml.text]) {
+      expect(text).toContain('Judul Utama');
+      expect(text).toContain('Sub Judul');
+      expect(text).toContain('Paragraf pertama');
+      expect(text).toContain('Paragraf kedua.');
+    }
+    expect(fromMarkdown.text).toBe(fromHtml.text);
+    expect(fromMarkdown.paragraphs).toEqual(['Paragraf pertama.', 'Paragraf kedua.']);
+    expect(fromHtml.paragraphs).toEqual(['Paragraf pertama.', 'Paragraf kedua.']);
+  });
+
   it('exposes image and link counts only for html', () => {
     const html = '<h2>S</h2><p>Teks satu.</p><p>Teks dua.</p><img src="a.jpg" alt="a"><a href="/x">y</a>';
     const doc = extractDocument(html, 'html');

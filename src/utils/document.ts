@@ -36,11 +36,13 @@ export function markdownToPlainText(markdown: string): string {
 }
 
 function extractMarkdownParts(markdown: string): {
+  text: string;
   headings: { level: number; text: string }[];
   paragraphs: string[];
 } {
   const headings: { level: number; text: string }[] = [];
   const paragraphs: string[] = [];
+  const corpus: string[] = [];
   const blocks = markdown
     .replace(/```[\s\S]*?```/g, ' ')
     .split(/\n\s*\n/);
@@ -53,20 +55,25 @@ function extractMarkdownParts(markdown: string): {
     if (headingMatch && lines.every((line) => /^\s{0,3}#{1,6}\s+/.test(line) || !line.trim())) {
       for (const line of lines) {
         const match = line.match(/^\s{0,3}(#{1,6})\s+(.*)$/);
-        if (match) headings.push({ level: match[1].length, text: match[2].trim() });
+        if (match) {
+          headings.push({ level: match[1].length, text: match[2].trim() });
+          corpus.push(markdownToPlainText(match[2]));
+        }
       }
       continue;
     }
-    paragraphs.push(markdownToPlainText(trimmed));
+    const prose = markdownToPlainText(trimmed);
+    paragraphs.push(prose);
+    corpus.push(prose);
   }
-  return { headings, paragraphs };
+  return { text: corpus.filter(Boolean).join(' '), headings, paragraphs };
 }
 
 export function extractDocument(source: string, kind: 'html' | 'markdown'): ArticleDocument {
   if (kind === 'markdown') {
-    const { headings, paragraphs } = extractMarkdownParts(source);
+    const { text, headings, paragraphs } = extractMarkdownParts(source);
     return {
-      text: paragraphs.join(' '),
+      text,
       headings,
       paragraphs,
       html: null,
