@@ -59,6 +59,63 @@ describe('validateRoleOutput: impower', () => {
     expect(data.secondaryKeywords).toEqual([]);
     expect(data.source).toBe('impower');
   });
+
+  it('keeps plain-string list fields untouched', () => {
+    const result = validateRoleOutput(
+      'impower',
+      JSON.stringify({
+        seoMetadata: { seoTitle: 'T', tags: ['b2b', 'gym'] },
+        secondaryKeywords: ['equipment', 'maintenance'],
+        internalLinkTargets: ['/blog/inspection'],
+      })
+    );
+    const data = (result as any).data;
+    expect(data.seoMetadata.tags).toEqual(['b2b', 'gym']);
+    expect(data.secondaryKeywords).toEqual(['equipment', 'maintenance']);
+    expect(data.internalLinkTargets).toEqual(['/blog/inspection']);
+  });
+
+  it('recovers object-shaped link targets instead of dropping them', () => {
+    // ornith:9b emits these as objects; a strict string filter lost them all.
+    const result = validateRoleOutput(
+      'impower',
+      JSON.stringify({
+        seoMetadata: { seoTitle: 'T' },
+        internalLinkTargets: [
+          { anchorText: 'equipment warranty', relevanceScore: 'high', context: 'vendor section' },
+          { anchorText: 'safety checklist', relevanceScore: 'medium' },
+        ],
+      })
+    );
+    expect((result as any).data.internalLinkTargets).toEqual([
+      'equipment warranty',
+      'safety checklist',
+    ]);
+  });
+
+  it('recovers object-shaped tags and keywords', () => {
+    const result = validateRoleOutput(
+      'impower',
+      JSON.stringify({
+        seoMetadata: { seoTitle: 'T', tags: [{ name: 'gym ops' }, 'plain'] },
+        secondaryKeywords: [{ text: 'treadmill repair' }],
+      })
+    );
+    const data = (result as any).data;
+    expect(data.seoMetadata.tags).toEqual(['gym ops', 'plain']);
+    expect(data.secondaryKeywords).toEqual(['treadmill repair']);
+  });
+
+  it('drops entries with no usable text rather than emitting blanks', () => {
+    const result = validateRoleOutput(
+      'impower',
+      JSON.stringify({
+        seoMetadata: { seoTitle: 'T' },
+        internalLinkTargets: [{ irrelevant: 'x' }, 'keep me', '', null],
+      })
+    );
+    expect((result as any).data.internalLinkTargets).toEqual(['keep me']);
+  });
 });
 
 describe('validateRoleOutput: creator', () => {

@@ -122,18 +122,24 @@ async function listAnthropic(baseUrl: string, apiKey: string | undefined): Promi
 async function listOllama(baseUrl: string): Promise<ModelInfo[]> {
   const data = await fetchJson(`${baseUrl}/api/tags`);
   const items: any[] = data.models ?? [];
-  return items.map((m) => ({
-    id: String(m.name ?? ''),
-    name: String(m.name ?? ''),
-    provider: 'ollama' as ProviderType,
-    detail: [
-      prettyParam(m.details?.parameter_size),
-      prettyParam(m.details?.quantization),
-      m.size ? `${Math.round(Number(m.size) / 1e9)} GB` : null,
-    ]
-      .filter(Boolean)
-      .join(' · ') || undefined,
-  })).filter((m: ModelInfo) => m.id);
+  return items.map((m) => {
+    const sizeGb = m.size ? Math.round(Number(m.size) / 1e9) : undefined;
+    return {
+      id: String(m.name ?? ''),
+      name: String(m.name ?? ''),
+      provider: 'ollama' as ProviderType,
+      detail: [
+        prettyParam(m.details?.parameter_size),
+        prettyParam(m.details?.quantization),
+        sizeGb ? `${sizeGb} GB` : null,
+        // A model much larger than a consumer GPU still lists fine here but
+        // dies with a CUDA OOM at load, so surface the weight up front.
+        sizeGb && sizeGb >= 20 ? 'needs a large GPU' : null,
+      ]
+        .filter(Boolean)
+        .join(' · ') || undefined,
+    };
+  }).filter((m: ModelInfo) => m.id);
 }
 
 async function fetchLive(request: CatalogRequest): Promise<ModelInfo[]> {

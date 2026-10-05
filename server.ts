@@ -4,9 +4,10 @@ import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { callProvider, cleanJsonOutput } from './src/server/providers.js';
+import { callProvider, callOllamaChunked, cleanJsonOutput } from './src/server/providers.js';
 import { ProviderConfig } from './src/types/provider.js';
 import { validateRoleOutput, buildRepairPrompt } from './src/server/roleSchemas.js';
+import { isChunkableRole } from './src/server/chunked.js';
 import { publishAgentEvent, readAgentEvents } from './src/server/agentEvents.js';
 import type { AgentEvent } from './src/types/agentEvents.js';
 import { listModels } from './src/server/modelCatalog.js';
@@ -218,6 +219,40 @@ app.post('/api/run-agent', async (req, res) => {
       }
       call = await callProvider(buildRepairPrompt(role as any, call.text), providerConfig, trace);
       result = validateRoleOutput(role as any, call.text);
+    }
+
+
+    // The repair pass is a resend of the same shape, so a response that was cut
+    // short by the output ceiling will be cut short again. Only then is it worth
+    // asking for the body a section at a time. Ollama-only: the other providers
+    // keep their current behaviour.
+    if (
+      !result.ok &&
+      providerConfig.provider === 'ollama' &&
+      isChunkableRole(role as string)
+    ) {
+      console.warn(`[run-agent] ${role} still invalid after repair, trying chunked generation:`);
+      if (trace) {
+        publishAgentEvent({
+          runId: trace.runId,
+          role: trace.role,
+          label: trace.label,
+          callId: trace.callId,
+          type: 'chunk',
+          provider: 'ollama',
+          model: call.model,
+          message: 'Retrying in sections — the single response did not fit.',
+        });
+      }
+      try {
+        call = await callOllamaChunked(prompt, role as any, providerConfig, trace);
+        result = validateRoleOutput(role as any, call.text);
+      } catch (chunkErr) {
+        const message =
+          chunkErr instanceof Error ? chunkErr.message : 'Chunked generation failed.';
+        report('failed', { model: call.model, message });
+        return res.status(502).json({ ok: false, error: message, recoverable: false });
+      }
     }
 
     if (!result.ok) {

@@ -3,6 +3,7 @@ import type { ProviderConfig, ProviderType } from '../types/provider';
 import { PROVIDER_PRESETS } from '../types/provider';
 import type { TokenUsage } from '../types/agentEvents';
 import { publishAgentEvent, type PublishInput } from './agentEvents';
+import { buildChunkPrompt, extractChunkBody, planChunks, stitchChunks, type ChunkableRole } from './chunked';
 
 export class ProviderCallError extends Error {
   constructor(
@@ -30,6 +31,11 @@ export interface ProviderCallResult {
   attempts: number;
   usage?: TokenUsage;
   requestedModel: string;
+  /**
+   * True when the provider stopped because it hit its output ceiling rather
+   * than finishing. The body is then usually a valid-looking prefix.
+   */
+  truncated?: boolean;
 }
 
 type PublishRest = Omit<PublishInput, 'runId' | 'role'>;
@@ -40,6 +46,40 @@ type PublishRest = Omit<PublishInput, 'runId' | 'role'>;
  * attempt is cut short and reported instead of hanging the pipeline.
  */
 const REQUEST_TIMEOUT_MS = 180_000;
+
+/**
+ * Explicit output ceiling for Ollama. Left unset, the effective limit depends on
+ * the machine's Ollama defaults rather than this app, so a long article can be
+ * cut off for reasons the user cannot see. Measured completions on the local
+ * models peak near 3.7k tokens, so this removes the cap without changing
+ * normal behaviour.
+ */
+const DEFAULT_OLLAMA_NUM_PREDICT = 16_384;
+
+function ollamaNumPredict(): number {
+  const raw = process.env.OLLAMA_NUM_PREDICT?.trim();
+  const parsed = Number(raw);
+  if (raw && Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
+  return DEFAULT_OLLAMA_NUM_PREDICT;
+}
+
+/**
+ * Ollama surfaces load failures as a plain HTTP 500 whose body explains the
+ * model never started, e.g. a 22 GB model on a 12 GB card. Retrying cannot help
+ * because the model will not fit on the next attempt either.
+ */
+function isOllamaOutOfMemory(raw: string): boolean {
+  return /out of memory|CUDA error|insufficient (?:VRAM|memory)|not enough memory/i.test(raw);
+}
+
+function ollamaOutOfMemoryMessage(raw: string, model: string, baseUrl: string): string {
+  const detail = readableProviderError(raw).replace(/\s+/g, ' ').trim();
+  return (
+    `Ollama could not load "${model}" into memory on this machine, so nothing was generated. ` +
+    `Pick a smaller model (the 7B-9B Q4_K_M builds fit comfortably) or free VRAM, then retry. ` +
+    `Underlying error: ${detail || 'out of memory'} (endpoint: ${baseUrl})`
+  );
+}
 
 function isTimeoutError(err: unknown): boolean {
   const e = err as { name?: string; message?: string };
@@ -456,7 +496,7 @@ export async function callOllama(
         prompt: fullPrompt,
         stream: false,
         format: 'json',
-        options: { temperature: 0.7 },
+        options: { temperature: 0.7, num_predict: ollamaNumPredict() },
       }),
     });
   } catch (err) {
@@ -477,6 +517,8 @@ export async function callOllama(
 
   if (!response.ok) {
     const errText = await response.text();
+    const oom = isOllamaOutOfMemory(errText);
+    const reason = oom ? ollamaOutOfMemoryMessage(errText, model, baseUrl) : `HTTP ${response.status}: ${readableProviderError(errText).slice(0, 160)}`;
     trace(callTrace, provider, {
       type: 'attempt',
       model,
@@ -484,15 +526,17 @@ export async function callOllama(
       attempt: 1,
       durationMs: Date.now() - startedAt,
       promptChars: fullPrompt.length,
-      message: `HTTP ${response.status}: ${readableProviderError(errText).slice(0, 160)}`,
+      message: oom ? `out of memory: ${readableProviderError(errText).slice(0, 160)}` : reason,
     });
     throw new ProviderCallError(
-      `Ollama endpoint returned ${response.status}: ${errText}`,
-      response.status === 429
+      reason,
+      // A model that will not fit will not fit on the next attempt either.
+      !oom && response.status === 429
     );
   }
   const data = await response.json();
   const text = data.response;
+  const truncated = data.done_reason === 'length';
   const usage: TokenUsage | undefined =
     data.prompt_eval_count || data.eval_count
       ? { input: data.prompt_eval_count, output: data.eval_count }
@@ -506,7 +550,11 @@ export async function callOllama(
     promptChars: fullPrompt.length,
     outputChars: text?.length ?? 0,
     usage,
-    message: text ? 'answered' : 'empty response',
+    message: text
+      ? truncated
+        ? `hit the ${ollamaNumPredict()}-token output ceiling (done_reason=length)`
+        : 'answered'
+      : 'empty response',
   });
   if (!text) throw new ProviderCallError('No content returned from Ollama provider.', true);
   return {
@@ -516,6 +564,7 @@ export async function callOllama(
     attempts: 1,
     usage,
     requestedModel: model,
+    truncated,
   };
 }
 
@@ -529,4 +578,106 @@ export async function callProvider(
   if (config.provider === 'anthropic') return callAnthropic(prompt, config, callTrace);
   if (config.provider === 'ollama') return callOllama(prompt, config, callTrace);
   throw new ProviderCallError(`Unsupported provider: ${config.provider}`, false);
+}
+
+/** Field each role's stitched output is wrapped back into. */
+const CHUNK_FIELD: Record<ChunkableRole, string> = {
+  creator: 'markdownContent',
+  designer: 'html',
+};
+
+const MAX_CHUNKS = 4;
+
+/**
+ * Re-run a role as separate sections and stitch them into one document.
+ *
+ * Only reached when a single response was truncated or unparseable. Out-of-memory
+ * failures are excluded upstream: a model that cannot load cannot produce a chunk
+ * either, so retrying would only waste time.
+ */
+export async function callOllamaChunked(
+  fullPrompt: string,
+  role: ChunkableRole,
+  config?: ProviderConfig,
+  callTrace?: CallTrace
+): Promise<ProviderCallResult> {
+  const provider: ProviderType = 'ollama';
+  const requestedModel = config?.model?.trim() || process.env.OLLAMA_MODEL || 'gemma4:e4b';
+  const plans = planChunks(role).slice(0, MAX_CHUNKS);
+  const field = CHUNK_FIELD[role];
+  const bodies: string[] = [];
+  const usage: TokenUsage = { input: 0, output: 0 };
+  let model = '';
+  let attempts = 0;
+  let lastError: unknown;
+
+  for (const plan of plans) {
+    try {
+      const result = await callOllama(
+        buildChunkPrompt(role, fullPrompt, plan, field),
+        config,
+        callTrace
+      );
+      model = result.model;
+      attempts += result.attempts;
+      const body = extractChunkBody(result.text, field);
+      if (body) bodies.push(body);
+      if (result.usage) {
+        usage.input = (usage.input ?? 0) + (result.usage.input ?? 0);
+        usage.output = (usage.output ?? 0) + (result.usage.output ?? 0);
+      }
+      trace(callTrace, provider, {
+        type: 'chunk',
+        model: result.model,
+        requestedModel: result.requestedModel,
+        attempt: plan.index,
+        totalAttempts: plans.length,
+        outputChars: body.length,
+        message: `section ${plan.index}/${plans.length} complete`,
+      });
+    } catch (err) {
+      lastError = err;
+      trace(callTrace, provider, {
+        type: 'chunk',
+        model: model || requestedModel,
+        requestedModel,
+        attempt: plan.index,
+        totalAttempts: plans.length,
+        message: `section ${plan.index}/${plans.length} failed: ${describeFailure(err).slice(0, 140)}`,
+      });
+      break;
+    }
+  }
+
+  const combined = stitchChunks(bodies);
+  if (!combined.trim()) {
+    throw new ProviderCallError(
+      `Chunked generation produced no usable output for "${role}" after ${bodies.length}/${plans.length} sections. ${
+        lastError ? describeFailure(lastError) : ''
+      }`.trim(),
+      true
+    );
+  }
+
+  // Each chunk carried its own {field: "..."} wrapper; unwrap those and wrap the
+  // combined document once.
+  const text = cleanJsonOutput(JSON.stringify({ [field]: combined }));
+  trace(callTrace, provider, {
+    type: 'chunk',
+    model: model || requestedModel,
+    requestedModel,
+    attempt: bodies.length,
+    totalAttempts: plans.length,
+    outputChars: text.length,
+    usage,
+    message: `stitched ${bodies.length}/${plans.length} sections into ${field}`,
+  });
+  return {
+    text,
+    model: model || requestedModel,
+    provider,
+    attempts,
+    usage,
+    requestedModel,
+  };
 }

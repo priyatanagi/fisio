@@ -5,6 +5,7 @@ export type AgentEventType =
   | 'attempt'
   | 'model-fallback'
   | 'repair'
+  | 'chunk'
   | 'completed'
   | 'failed';
 

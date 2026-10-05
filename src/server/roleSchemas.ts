@@ -30,6 +30,29 @@ const strArray = (value: unknown): string[] =>
     ? value.filter((v): v is string => typeof v === 'string' && v.length > 0)
     : [];
 
+/**
+ * Local models frequently return these list fields as objects instead of
+ * strings -- `ornith:9b` emits internalLinkTargets as {anchorText, ...}. The
+ * strict filter above silently dropped those to an empty array, losing the
+ * links with no signal anywhere. Prefer the string form, then the common
+ * object keys, so the data survives.
+ */
+function strList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => {
+      if (typeof entry === 'string') return entry.trim();
+      if (!entry || typeof entry !== 'object') return '';
+      const record = entry as Record<string, unknown>;
+      for (const key of ['anchorText', 'text', 'title', 'name', 'value']) {
+        const candidate = str(record[key]);
+        if (candidate) return candidate;
+      }
+      return '';
+    })
+    .filter((entry) => entry.length > 0);
+}
+
 function validateJudge(obj: Record<string, unknown>): ValidationResult<JudgeOutput> {
   if (!str(obj.refinedTopic)) {
     return { ok: false, error: 'judge output is missing refinedTopic' };
@@ -69,9 +92,9 @@ function coerceBrief(
       focusKeyphrase: str(meta.focusKeyphrase),
       metaDescription: str(meta.metaDescription),
       urlSlug: str(meta.urlSlug),
-      tags: strArray(meta.tags),
+      tags: strList(meta.tags),
     },
-    secondaryKeywords: strArray(obj.secondaryKeywords),
+    secondaryKeywords: strList(obj.secondaryKeywords),
     outline: Array.isArray(obj.outline)
       ? (obj.outline as unknown[]).map((o) => ({
           heading: str((o as Record<string, unknown>)?.heading),
@@ -84,8 +107,8 @@ function coerceBrief(
           answerShape: str((f as Record<string, unknown>)?.answerShape),
         }))
       : [],
-    statPlan: strArray(obj.statPlan),
-    internalLinkTargets: strArray(obj.internalLinkTargets),
+    statPlan: strList(obj.statPlan),
+    internalLinkTargets: strList(obj.internalLinkTargets),
     source,
   };
 }
