@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 
 import { AppShell } from './app/AppShell';
 import { useHashRoute, navigateTo, type RouteId } from './app/useHashRoute';
+import { parseServerInfo, type ServerInfo } from './app/serverInfo';
 import { useArticleRun } from './app/useArticleRun';
 import { upsertArticle } from './app/articleList';
 import { sanitizePipelineConfig } from './app/pipelineConfig';
@@ -65,6 +66,7 @@ export default function App() {
   const [articles, setArticles] = useState<GeneratedArticle[]>([]);
   const [isDbLoaded, setIsDbLoaded] = useState(false);
   const [serverStatus, setServerStatus] = useState<'connected' | 'checking' | 'error'>('checking');
+  const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
   const [storageWarning, setStorageWarning] = useState<string | null>(null);
 
   const handleSaveProfile = (next: UserProfile) => {
@@ -93,9 +95,12 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetch('/api/health')
+    fetch('/api/health', { cache: 'no-store' })
       .then((res) => res.json())
-      .then((data) => setServerStatus(data.status === 'ok' ? 'connected' : 'error'))
+      .then((data) => {
+        setServerStatus(data.status === 'ok' ? 'connected' : 'error');
+        setServerInfo(parseServerInfo(data));
+      })
       .catch(() => setServerStatus('error'));
   }, []);
 
@@ -229,6 +234,7 @@ export default function App() {
       historyCount={articles.length}
       profileConfigured={isProfileConfigured(profile)}
       serverStatus={serverStatus}
+      serverInfo={serverInfo}
     >
       {storageWarning && (
         <div className="px-4 sm:px-6 lg:px-8 pt-4">

@@ -340,6 +340,12 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
 
   const activeFormatMeta = FORMAT_OPTIONS.find((f) => f.id === selectedFormat) || FORMAT_OPTIONS[0];
 
+  // A zero means the run measured nothing, so it is shown as absent rather than as a score.
+  const measuredFlesch =
+    typeof article.metrics.fleschScore === 'number' && article.metrics.fleschScore > 0
+      ? article.metrics.fleschScore
+      : null;
+
   return (
     <div className="space-y-6">
       {/* Review Gate Banner — shown only when the strict reviewer halted this draft */}
@@ -389,8 +395,12 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
 
           <div className="flex items-center gap-1.5">
             <span className="text-zinc-400 font-mono">Flesch Score:</span>
-            <span className="font-semibold text-emerald-400 font-mono px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700">
-              {article.metrics.fleschScore || 65} (Yoast Compliant)
+            <span
+              className={`font-semibold font-mono px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700 ${
+                measuredFlesch === null ? 'text-zinc-500' : 'text-emerald-400'
+              }`}
+            >
+              {measuredFlesch === null ? '— not measured' : measuredFlesch}
             </span>
           </div>
 

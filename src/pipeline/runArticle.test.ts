@@ -27,6 +27,8 @@ vi.mock('./runAgent', () => ({
 import { runArticle, resumeArticle } from './runArticle';
 import { DEFAULT_USER_PROFILE } from '../types/profile';
 import { DEFAULT_UNIVERSAL_RULES } from '../config/universalRules';
+import { extractDocument } from '../utils/document';
+import { readabilityFromText } from '../utils/readability';
 import type { PipelineConfig } from './stages';
 
 const multiAgentConfig: any = {
@@ -403,6 +405,7 @@ describe('failure handling', () => {
 });
 
 function makeStalled(): any {
+  const measured = readabilityFromText(extractDocument(markdown, 'markdown').text, 'en');
   return {
     id: 'art_stalled_1',
     topic: 'Choosing a commercial treadmill',
@@ -417,7 +420,11 @@ function makeStalled(): any {
     inlineCssHtml: '',
     cleanHtml: '',
     imagePrompts: [],
-    metrics: { wordCount: 12, readingTimeMinutes: 1, fleschScore: 0 },
+    metrics: {
+      wordCount: measured.wordCount,
+      readingTimeMinutes: Math.max(1, Math.ceil(measured.wordCount / 200)),
+      fleschScore: measured.fleschReadingEase,
+    },
     generatedAt: new Date().toISOString(),
     rawText: markdown,
     pipelineConfig: baseConfig,
@@ -506,5 +513,30 @@ describe('resumeArticle — retry creator', () => {
     expect(result.status).toBe('needs_attention');
     expect(result.article!.id).toBe('art_stalled_1');
     expect(result.article!.rawText).toContain('Some body content');
+  });
+});
+
+describe('measured metrics', () => {
+  it('records a measured Flesch score instead of a zero placeholder', async () => {
+    const result = await run({ judge: false, impower: 'off', reviewer: 'off', targetWords: 900 }, {
+      creator: () => ({
+        markdownContent:
+          '# Judul Artikel\n\nProgram makan bergizi gratis menyediakan makan siang gratis bagi anak sekolah. ' +
+          'Program ini berjalan setiap hari kerja di sekolah. Dapur berada di dalam sekolah masing-masing.\n\n' +
+          '## Sasaran\n\nSasaran utama adalah anak sekolah dasar kelas satu sampai enam. Pendaftaran dilakukan ' +
+          'pada awal tahun ajaran. Biaya program ditanggung oleh pemerintah pusat.\n\n' +
+          '## Distribusi\n\nDistribusi dilakukan melalui dapur yang dikelola sekolah. Pengambilan berlangsung ' +
+          'saat jam istirahat. Jadwal distribusi berjalan setiap hari kerja tanpa kecuali.\n',
+      }),
+      designer: () => ({
+        html: '<article><h2>Sasaran</h2><p>Sasaran utama adalah anak sekolah dasar kelas satu sampai enam. Pendaftaran dilakukan pada awal tahun ajaran.</p></article>',
+        warnings: [],
+      }),
+    });
+    const article = result.article!;
+    expect(article.metrics.fleschScore).toBeGreaterThan(0);
+    expect(article.score).toBeDefined();
+    expect(article.score?.flesch).toBeGreaterThan(0);
+    expect(article.score?.checks).toHaveLength(16);
   });
 });

@@ -9,7 +9,25 @@ export interface DesignRules {
   headingFont: string;
   bodyFont: string;
   buttonStyle: 'rounded' | 'square' | 'pill';
-  blockquoteStyle: 'accent-bar' | 'card' | 'plain';
+  blockquoteStyle: 'accent-bar' | 'card' | 'plain' | 'centered';
+
+  // Element and block styling. Optional because profiles saved before these
+  // tokens existed must still load; readToken()/withTokenDefaults() in
+  // config/designTokens supply the fallback for anything missing.
+  bodyStyle?: string;
+  headingStyle?: string;
+  lineHeight?: string;
+  measureWidth?: string;
+  h1Size?: string;
+  headingWeight?: string;
+  letterSpacing?: string;
+  hyperlinkStyle?: string;
+  bulletStyle?: string;
+  numberingStyle?: string;
+  imageStyle?: string;
+  codeStyle?: string;
+  tableStyle?: string;
+  faqStyle?: string;
 }
 
 export interface UserProfile {
@@ -22,6 +40,12 @@ export interface UserProfile {
   defaultCta: string;
   designRules: DesignRules;
   exclusions: string[];
+  /**
+   * Per-output-format token overrides, keyed by format id. Optional because
+   * profiles saved before this existed must still load; absent means every
+   * format uses designRules as-is.
+   */
+  formatOverrides?: Record<string, Record<string, string>>;
 }
 
 // Empty strings mean "not configured". Prompts fall back to FALLBACK_BRAND so

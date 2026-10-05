@@ -145,7 +145,11 @@ function buildMetadataSummary(article: GeneratedArticle): string {
     `Target Words    : ${article.targetWordCount}`,
     `Actual Words    : ${article.metrics?.wordCount ?? 0}`,
     `Reading Time    : ~${article.metrics?.readingTimeMinutes ?? 0} mins`,
-    `Flesch Score    : ${article.metrics?.fleschScore ?? 0}`,
+    `Flesch Score    : ${
+      typeof article.metrics?.fleschScore === 'number' && article.metrics.fleschScore > 0
+        ? article.metrics.fleschScore
+        : 'n/a (not measured)'
+    }`,
     `Generated Date  : ${new Date(article.generatedAt).toLocaleString()}`,
     `Active Formats  : ${Object.keys(article.formats ?? {}).join(', ') || 'none'}`,
     article.reviewReport

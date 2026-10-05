@@ -57,11 +57,20 @@ Node typescript is checked with `tsc --noEmit` (the `lint` script). No separate 
 ```bash
 npm install
 cp .env.example .env       # then fill in what you actually use (see below)
-npm run dev                # Express + Vite dev server, http://localhost:3000
+npm run dev                # Express + Vite dev server, http://localhost:5177
 ```
 
-If port 3000 is busy the server automatically tries the next one (up to 10 attempts) and prints the
-real URL.
+If port 5177 is busy the server automatically tries the next one (up to 10 attempts) and prints the
+real URL. Always open the URL printed at startup — a stale `localhost:3000` bookmark will land in
+whatever other app owns that port.
+
+Two safeguards back that up, because a restored browser tab can otherwise show you the wrong app:
+
+- The sidebar footer prints the bound port and a per-process instance tag (e.g. `:5177 · BF58`), so any
+  tab immediately reveals which server is answering it.
+- HTML and API responses are sent `Cache-Control: no-store`. Firefox restores session tabs from
+  bfcache without contacting the server, so `localhost:3000` could keep displaying whichever app
+  owned that port earlier. `no-store` is what prevents that; `no-cache` alone does not.
 
 ### Zero-cost testing with Ollama
 
@@ -83,7 +92,7 @@ fallbacks/defaults** — per-role provider settings live in the Providers view (
 | `OLLAMA_BASE_URL` | Default base URL for the Ollama provider (blank per-role base URL falls back to this). |
 | `OLLAMA_MODEL` | Default model id for the Ollama provider (blank per-role model falls back to this). |
 | `APP_URL` | Hosted app URL used for self-referential links. |
-| `PORT` | Express listen port; defaults to `3000` with automatic fallback. |
+| `PORT` | Express listen port; defaults to `5177` with automatic fallback. |
 
 ### Provider roles
 
@@ -171,7 +180,7 @@ The SPA drives the pipeline one role at a time through the server:
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/health` | Liveness + `hasKey` (whether a server Gemini key is present). |
+| `GET /api/health` | Liveness + `hasKey` (whether a server Gemini key is present), plus `app`, `instance`, `port`, `pid` and `startedAt` so you can tell which dev server answered. |
 | `POST /api/run-agent` | Runs a single role: builds the prompt, calls the provider, validates the JSON shape (one repair attempt on a shape problem), returns typed data. |
 | `POST /api/test-provider` | Connectivity test per provider. For Ollama it lists local models via `/api/tags` (instant, no inference); for OpenAI-compatible it hits `/models`; others run a tiny JSON round-trip. |
 

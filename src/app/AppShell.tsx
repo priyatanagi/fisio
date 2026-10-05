@@ -1,6 +1,7 @@
 import React, { type ReactNode } from 'react';
 import { Cpu, Sparkles, Layers, User, Clock, Server } from 'lucide-react';
 import { navigateTo, type RouteId } from './useHashRoute';
+import type { ServerInfo } from './serverInfo';
 
 const NAV: { id: RouteId; label: string; icon: ReactNode }[] = [
   { id: 'generate', label: 'Generate', icon: <Sparkles className="w-4 h-4" /> },
@@ -16,6 +17,8 @@ interface AppShellProps {
   historyCount: number;
   profileConfigured: boolean;
   serverStatus: 'connected' | 'checking' | 'error';
+  /** Which dev server answered, so a restored tab is never ambiguous. */
+  serverInfo: ServerInfo | null;
 }
 
 export const AppShell: React.FC<AppShellProps> = ({
@@ -24,6 +27,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   historyCount,
   profileConfigured,
   serverStatus,
+  serverInfo,
 }) => {
   return (
     <div className="h-dvh overflow-hidden bg-zinc-950 text-zinc-100 flex font-sans antialiased selection:bg-zinc-800">
@@ -80,6 +84,14 @@ export const AppShell: React.FC<AppShellProps> = ({
           >
             {serverStatus === 'connected' ? 'server connected' : serverStatus}
           </div>
+          {serverStatus === 'connected' && serverInfo?.port ? (
+            <div
+              className="text-[10px] font-mono text-zinc-500"
+              title="Port and instance of the dev server answering this tab. If another app owns a port, this tells you which one you are looking at."
+            >
+              :{serverInfo.port} · {serverInfo.instance ?? '—'}
+            </div>
+          ) : null}
         </div>
       </nav>
 

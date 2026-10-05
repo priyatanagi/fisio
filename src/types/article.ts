@@ -5,6 +5,7 @@ import type {
   JudgeOutput,
   BrandWarning,
 } from '../pipeline/stages';
+import type { ArticleScore } from '../pipeline/scoreArticle';
 import type { UserProfile } from './profile';
 
 export type LanguageOption = 'en' | 'id' | 'es' | 'de' | 'fr';
@@ -71,6 +72,10 @@ export interface GeneratedArticle {
   reviewReport?: ReviewReport;
   judgeOutput?: JudgeOutput;
   reviewPassed?: boolean;
+  /** Measured against the draft, never supplied by the model. */
+  score?: ArticleScore;
+  belowTarget?: boolean;
+  remainingGaps?: string[];
   brandWarnings?: BrandWarning[];
   batchJobId?: string;
   batchRowId?: string;

@@ -83,18 +83,26 @@ export const HistoryTable: React.FC<HistoryTableProps> = ({ articles, onOpen, on
                     {article.metrics?.wordCount ?? 0}
                   </td>
                   <td className="px-3 py-2">
-                    {article.reviewReport ? (
-                      <span
-                        className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
-                          article.reviewReport.verdict === 'pass'
-                            ? 'bg-emerald-950/50 text-emerald-300'
-                            : 'bg-rose-950/50 text-rose-300'
-                        }`}
-                      >
-                        {article.reviewReport.verdict} {article.reviewReport.seoScore}
+                    {article.score ? (
+                      <span className="flex items-center gap-1">
+                        <span
+                          className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                            article.score.passed
+                              ? 'bg-emerald-950/50 text-emerald-300'
+                              : 'bg-amber-950/50 text-amber-300'
+                          }`}
+                          title={`Score ${article.score.total}/${article.score.target} across ${article.score.scoredCount} measured checks`}
+                        >
+                          {article.score.total}
+                        </span>
+                        {article.belowTarget && (
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-950/50 text-amber-300">
+                            below target
+                          </span>
+                        )}
                       </span>
                     ) : (
-                      <span className="text-[10px] text-zinc-600">not reviewed</span>
+                      <span className="text-[10px] text-zinc-600">not scored</span>
                     )}
                   </td>
                   <td className="px-3 py-2 font-mono text-[10px] text-zinc-500">

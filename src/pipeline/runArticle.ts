@@ -19,6 +19,9 @@ import type {
 import { resolveBrief } from './seoBrief';
 import { resolveTopicForRun } from './topicFidelity';
 import { runAgent, AgentError } from './runAgent';
+import { extractDocument } from '../utils/document';
+import { readabilityFromText } from '../utils/readability';
+import { scoreDraft, type ArticleScore } from './scoreArticle';
 
 export interface RunArticleOptions {
   seedTopic: string;
@@ -414,6 +417,8 @@ interface BuildArticleParams {
   reviewPassed?: boolean;
   judge?: JudgeOutput;
   articleId?: string;
+  /** A score the caller already measured; buildArticle measures one when none is given. */
+  score?: ArticleScore;
 }
 
 function buildArticle(params: BuildArticleParams): GeneratedArticle {
@@ -421,6 +426,7 @@ function buildArticle(params: BuildArticleParams): GeneratedArticle {
   const markdown = creator.markdownContent;
   const textOnly = markdown.replace(/[#*_>`]/g, ' ').replace(/\s+/g, ' ').trim();
   const wordCount = textOnly ? textOnly.split(' ').length : options.config.targetWords;
+  const language = options.config.languages[0] ?? 'en';
 
   const metadata =
     brief?.seoMetadata ??
@@ -436,12 +442,36 @@ function buildArticle(params: BuildArticleParams): GeneratedArticle {
       tags: [],
     } as GeneratedArticle['seoMetadata']);
 
+  const inlineCssHtml = formatsBundle['inline-en'] || formatsBundle['inline-id'] || '';
+  const cleanHtml = formatsBundle['clean-en'] || formatsBundle['clean-id'] || '';
+
+  // Measure the HTML that ships when a format rendered, else the draft itself. A run that
+  // produced neither measures nothing and keeps a zero, which every surface reads as absent.
+  const renderedHtml = inlineCssHtml || cleanHtml;
+  const fleschScore = readabilityFromText(
+    renderedHtml
+      ? extractDocument(renderedHtml, 'html').text
+      : extractDocument(markdown, 'markdown').text,
+    language
+  ).fleschReadingEase;
+
+  // Scored from the markdown that ships, so a stored article is never left unscored.
+  const score =
+    params.score ??
+    scoreDraft(
+      markdown,
+      metadata,
+      metadata.focusKeyphrase || options.focusKeyphrase,
+      options.config.targetWords,
+      language
+    );
+
   return {
     id: params.articleId ?? `art_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     topic: refinedTopic,
     focusKeyphrase: metadata.focusKeyphrase || options.focusKeyphrase,
     secondaryKeywords: brief?.secondaryKeywords.join(', ') ?? '',
-    language: options.config.languages[0] ?? 'en',
+    language,
     lengthTarget: options.config.lengthTarget ?? 'custom',
     targetWordCount: options.config.targetWords,
     targetFormats: options.config.targetFormats,
@@ -449,13 +479,13 @@ function buildArticle(params: BuildArticleParams): GeneratedArticle {
     seoMetadata: metadata,
     seoMetadataEn: options.config.languages.includes('en') ? metadata : undefined,
     seoMetadataId: options.config.languages.includes('id') ? metadata : undefined,
-    inlineCssHtml: formatsBundle['inline-en'] || formatsBundle['inline-id'] || '',
-    cleanHtml: formatsBundle['clean-en'] || formatsBundle['clean-id'] || '',
+    inlineCssHtml,
+    cleanHtml,
     imagePrompts: [],
     metrics: {
       wordCount,
       readingTimeMinutes: Math.max(1, Math.ceil(wordCount / 200)),
-      fleschScore: 0,
+      fleschScore,
     },
     generatedAt: new Date().toISOString(),
     rawText: markdown,
@@ -465,6 +495,9 @@ function buildArticle(params: BuildArticleParams): GeneratedArticle {
     reviewReport: report,
     judgeOutput: judge,
     reviewPassed: params.reviewPassed,
+    score,
+    belowTarget: !score.passed,
+    remainingGaps: score.failed.map((c) => `${c.id}: ${c.actual}`),
     brandWarnings: params.warnings,
     batchJobId: options.batchRefs?.jobId,
     batchRowId: options.batchRefs?.rowId,

@@ -8,7 +8,14 @@ export interface BrandWarning {
 // The five values hardcoded in the pre-profile prompts, mapped to their
 // profile equivalents so a Designer run that echoes the old palette still
 // comes out on-brand.
-const LEGACY_MAP: Record<string, keyof DesignRules> = {
+type ColorRuleKey =
+  | 'primaryColor'
+  | 'secondaryColor'
+  | 'accentColor'
+  | 'backgroundColor'
+  | 'textColor';
+
+const LEGACY_MAP: Record<string, ColorRuleKey> = {
   '#cc2929': 'primaryColor',
   '#1a1d20': 'secondaryColor',
   '#333940': 'textColor',
@@ -16,7 +23,7 @@ const LEGACY_MAP: Record<string, keyof DesignRules> = {
   '#e2e8f0': 'primaryColor',
 };
 
-const CUSTOM_PROPERTY_MAP: Record<string, keyof DesignRules> = {
+const CUSTOM_PROPERTY_MAP: Record<string, ColorRuleKey> = {
   '--primary': 'primaryColor',
   '--accent': 'accentColor',
   '--dark': 'secondaryColor',

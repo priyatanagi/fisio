@@ -4,6 +4,7 @@ import { BrainCircuit, Search, Edit3, ClipboardCheck, Paintbrush } from 'lucide-
 import type { AgentRole, MultiAgentConfig, ProviderConfig, ProviderType } from '../types/provider';
 import { PROVIDER_PRESETS as PRESETS } from '../types/provider';
 import { ModelPicker } from '../components/ModelPicker';
+import { noAutofillProps, noAutofillSecretProps } from '../utils/autofillGuard';
 
 interface ProvidersViewProps {
   multiAgentConfig: MultiAgentConfig;
@@ -164,6 +165,8 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, 
               value={config.baseUrl ?? ''}
               onChange={(e) => update({ baseUrl: e.target.value })}
               placeholder={preset.defaultBaseUrl || 'Default endpoint'}
+              spellCheck={false}
+              {...noAutofillProps(`base-url-${activeRole}`)}
               className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-[11px] font-mono text-zinc-100 outline-none focus:border-zinc-500"
             />
           </label>
@@ -175,6 +178,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, 
               value={config.apiKey ?? ''}
               onChange={(e) => update({ apiKey: e.target.value })}
               placeholder={keyPlaceholder(config.provider)}
+              {...noAutofillSecretProps(`api-key-${activeRole}`)}
               disabled={config.provider === 'ollama'}
               className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-[11px] font-mono text-zinc-100 outline-none focus:border-zinc-500 disabled:opacity-50"
             />

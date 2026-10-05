@@ -1,7 +1,12 @@
 import React, { useState } from 'react';
 import { Check, Plus, Trash2 } from 'lucide-react';
-import type { DesignRules, UserProfile } from '../types/profile';
+import type { UserProfile } from '../types/profile';
 import { DEFAULT_USER_PROFILE, FALLBACK_BRAND, isProfileConfigured } from '../types/profile';
+import { TOKEN_GROUPS, readToken, withTokenDefaults, type Token } from '../config/designTokens';
+import { applyPreset, importPreset, BRAND_PRESETS, type FormatOverrides } from '../config/brandPresets';
+import { DesignTokenPreview } from './DesignTokenPreview';
+import { BrandKitPanel } from './BrandKitPanel';
+import { RuleDiffPanel } from './RuleDiffPanel';
 
 interface UserProfileFormProps {
   profile: UserProfile;
@@ -26,20 +31,21 @@ const SAMPLE_PROFILE: UserProfile = {
     bodyFont: 'Inter, system-ui, sans-serif',
     buttonStyle: 'rounded',
     blockquoteStyle: 'accent-bar',
+    bodyStyle: 'readable',
+    headingStyle: 'strong',
+    hyperlinkStyle: 'underline',
+    bulletStyle: 'disc',
+    numberingStyle: 'decimal',
+    imageStyle: 'rounded',
+    codeStyle: 'subtle',
+    tableStyle: 'header-fill',
+    faqStyle: 'divided',
   },
   exclusions: [
     'EXCLUDE voucher and discount searches ("diskon fisioterapi", "promo gratis") — position on clinical outcomes, not price.',
     'EXCLUDE acute emergency searches ("fisioterapi积分 emergency 24 jam") — refer those cases to a hospital.',
   ],
 };
-
-const COLOR_FIELDS: { key: keyof DesignRules; label: string }[] = [
-  { key: 'primaryColor', label: 'Primary' },
-  { key: 'secondaryColor', label: 'Secondary' },
-  { key: 'accentColor', label: 'Accent' },
-  { key: 'backgroundColor', label: 'Background' },
-  { key: 'textColor', label: 'Body text' },
-];
 
 const FIELD_LABELS: { key: keyof UserProfile; label: string; placeholder: string }[] = [
   { key: 'businessName', label: 'Business / brand name', placeholder: 'Sehat Sentosa' },
@@ -51,25 +57,116 @@ const FIELD_LABELS: { key: keyof UserProfile; label: string; placeholder: string
   { key: 'defaultCta', label: 'Default call to action', placeholder: 'Book your first session today.' },
 ];
 
+interface TokenFieldProps {
+  token: Token;
+  value: string;
+  onChange: (value: string) => void;
+}
+
+/** One token control. The control type follows the token so a colour never asks
+ *  for a font stack and a choice never pretends to be free text. */
+const TokenField: React.FC<TokenFieldProps> = ({ token, value, onChange }) => {
+  const label = (
+    <span className="text-[11px] text-zinc-300 font-medium" title={token.hint}>
+      {token.label}
+    </span>
+  );
+
+  if (token.kind === 'color') {
+    return (
+      <label className="block space-y-1">
+        {label}
+        <div className="flex items-center gap-2">
+          <input
+            type="color"
+            value={/^#[0-9a-f]{6}$/i.test(value) ? value : '#000000'}
+            onChange={(e) => onChange(e.target.value)}
+            className="w-8 h-8 rounded border border-zinc-700 bg-transparent cursor-pointer shrink-0"
+          />
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            className="flex-1 min-w-0 bg-zinc-950 border border-zinc-800 rounded-lg p-1.5 text-[11px] font-mono text-zinc-100 outline-none focus:border-zinc-500"
+          />
+        </div>
+      </label>
+    );
+  }
+
+  if (token.kind === 'choice') {
+    return (
+      <label className="block space-y-1">
+        {label}
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-[11px] text-zinc-200 outline-none focus:border-zinc-500"
+        >
+          {token.options.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+
+  return (
+    <label className="block space-y-1">
+      {label}
+      <input
+        type="text"
+        value={value}
+        placeholder={token.placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-[11px] font-mono text-zinc-100 outline-none focus:border-zinc-500"
+      />
+    </label>
+  );
+};
+
 export const UserProfileForm: React.FC<UserProfileFormProps> = ({ profile, onSave }) => {
   const [draft, setDraft] = useState<UserProfile>(profile);
   const [saved, setSaved] = useState(false);
   const [newExclusion, setNewExclusion] = useState('');
+  const [overrides, setOverrides] = useState<FormatOverrides>(
+    () => profile.formatOverrides ?? {}
+  );
 
   const setField = <K extends keyof UserProfile>(key: K, value: UserProfile[K]) =>
     setDraft((prev) => ({ ...prev, [key]: value }));
 
-  const setDesign = <K extends keyof DesignRules>(key: K, value: string) =>
-    setDraft((prev) => ({ ...prev, designRules: { ...prev.designRules, [key]: value } }));
+  const setDesign = (key: string, value: string) =>
+    setDraft((prev) => ({
+      ...prev,
+      designRules: { ...prev.designRules, [key]: value } as typeof prev.designRules,
+    }));
 
   const handleSave = () => {
-    onSave(draft);
+    // Overrides are saved with the profile; leaving them in local state would
+    // silently drop them on reload and on any per-format styling.
+    onSave({ ...draft, formatOverrides: overrides });
     setSaved(true);
     setTimeout(() => setSaved(false), 1200);
   };
 
+  const handleApplyPreset = (payload: string) => {
+    // A new kit replaces the base tokens; per-format overrides would otherwise
+    // keep overriding choices the user just replaced wholesale.
+    setOverrides({});
+    setDraft((prev) => {
+      if (BRAND_PRESETS.some((p) => p.id === payload)) {
+        return { ...prev, designRules: applyPreset(prev.designRules, payload) };
+      }
+      const result = importPreset(payload);
+      return result.preset ? { ...prev, designRules: result.preset.rules } : prev;
+    });
+  };
+
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-6xl space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-sm font-semibold text-zinc-100">Brand profile</h2>
@@ -85,6 +182,15 @@ export const UserProfileForm: React.FC<UserProfileFormProps> = ({ profile, onSav
           Load sample profile
         </button>
       </div>
+
+      <RuleDiffPanel saved={profile.designRules} draft={draft.designRules} />
+
+      <BrandKitPanel
+        rules={withTokenDefaults(draft.designRules)}
+        onApplyPreset={handleApplyPreset}
+        overrides={overrides}
+        onOverrideChange={setOverrides}
+      />
 
       {!isProfileConfigured(draft) && (
         <div className="p-3 bg-amber-950/40 border border-amber-900 rounded-lg text-[11px] text-amber-300">
@@ -110,88 +216,47 @@ export const UserProfileForm: React.FC<UserProfileFormProps> = ({ profile, onSav
       </div>
 
       <div className="space-y-3 bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-        <h3 className="text-xs font-semibold text-zinc-200">Design tokens</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          {COLOR_FIELDS.map((field) => (
-            <label key={field.key} className="block space-y-1">
-              <span className="text-[11px] text-zinc-400">{field.label}</span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="color"
-                  value={draft.designRules[field.key] as string}
-                  onChange={(e) => setDesign(field.key, e.target.value)}
-                  className="w-8 h-8 rounded border border-zinc-700 bg-transparent cursor-pointer"
-                />
-                <input
-                  type="text"
-                  value={String(draft.designRules[field.key])}
-                  onChange={(e) => setDesign(field.key, e.target.value)}
-                  className="flex-1 min-w-0 bg-zinc-950 border border-zinc-800 rounded-lg p-1.5 text-[11px] font-mono text-zinc-100 outline-none focus:border-zinc-500"
-                />
-              </div>
-            </label>
-          ))}
+        <div>
+          <h3 className="text-xs font-semibold text-zinc-200">Design tokens</h3>
+          <p className="text-[11px] text-zinc-500">
+            Grouped by what they affect. Every value below is passed to the Designer prompt and
+            applied as inline CSS, so these choices are instructions, not decoration.
+          </p>
         </div>
 
-        <div className="flex items-end gap-2">
-          <label className="flex-1 space-y-1">
-            <span className="text-[11px] text-zinc-400">Swatch preview</span>
-            <div className="flex h-8 rounded-lg overflow-hidden border border-zinc-800">
-              {COLOR_FIELDS.map((field) => (
-                <div
-                  key={field.key}
-                  title={String(draft.designRules[field.key])}
-                  style={{ background: String(draft.designRules[field.key]) }}
-                  className="flex-1"
-                />
-              ))}
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="space-y-5">
+            {TOKEN_GROUPS.map((group) => (
+              <section key={group.id} className="space-y-2">
+                <div>
+                  <h4 className="text-[11px] font-semibold uppercase tracking-wide text-zinc-300">
+                    {group.title}
+                  </h4>
+                  <p className="text-[10px] text-zinc-500 leading-relaxed">{group.summary}</p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {group.tokens.map((token) => (
+                    <TokenField
+                      key={token.key}
+                      token={token}
+                      value={readToken(draft.designRules, token)}
+                      onChange={(v) => setDesign(token.key, v)}
+                    />
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+
+          <div className="lg:sticky lg:top-4 self-start space-y-2">
+            <div className="flex items-center justify-between">
+              <h4 className="text-[11px] font-semibold uppercase tracking-wide text-zinc-300">
+                Live preview
+              </h4>
+              <span className="text-[10px] text-zinc-500">updates as you type</span>
             </div>
-          </label>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <label className="block space-y-1">
-            <span className="text-[11px] text-zinc-400">Heading font</span>
-            <input
-              type="text"
-              value={draft.designRules.headingFont}
-              onChange={(e) => setDesign('headingFont', e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-[11px] font-mono text-zinc-100 outline-none focus:border-zinc-500"
-            />
-          </label>
-          <label className="block space-y-1">
-            <span className="text-[11px] text-zinc-400">Body font</span>
-            <input
-              type="text"
-              value={draft.designRules.bodyFont}
-              onChange={(e) => setDesign('bodyFont', e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-[11px] font-mono text-zinc-100 outline-none focus:border-zinc-500"
-            />
-          </label>
-          <label className="block space-y-1">
-            <span className="text-[11px] text-zinc-400">Button style</span>
-            <select
-              value={draft.designRules.buttonStyle}
-              onChange={(e) => setDesign('buttonStyle', e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-[11px] text-zinc-200 outline-none focus:border-zinc-500"
-            >
-              <option value="rounded">Rounded</option>
-              <option value="square">Square</option>
-              <option value="pill">Pill</option>
-            </select>
-          </label>
-          <label className="block space-y-1">
-            <span className="text-[11px] text-zinc-400">Blockquote style</span>
-            <select
-              value={draft.designRules.blockquoteStyle}
-              onChange={(e) => setDesign('blockquoteStyle', e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-[11px] text-zinc-200 outline-none focus:border-zinc-500"
-            >
-              <option value="accent-bar">Accent bar</option>
-              <option value="card">Card</option>
-              <option value="plain">Plain</option>
-            </select>
-          </label>
+            <DesignTokenPreview rules={withTokenDefaults(draft.designRules)} />
+          </div>
         </div>
       </div>
 

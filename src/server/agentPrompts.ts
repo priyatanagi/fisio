@@ -1,6 +1,8 @@
 import type { UserProfile, DesignRules } from '../types/profile';
 import { resolveProfile } from '../types/profile';
 import { DEFAULT_UNIVERSAL_RULES, type UniversalRules } from '../config/universalRules';
+import { withTokenDefaults, readToken, type Token } from '../config/designTokens';
+import { validateContrast } from '../config/tokenContrast';
 import type { SeoBrief } from '../pipeline/stages';
 
 export function buildBrandBlock(profile: UserProfile): string {
@@ -51,17 +53,44 @@ export function buildUniversalRulesBlock(rules: UniversalRules): string {
 }
 
 export function buildDesignTokenBlock(rules: DesignRules): string {
+  const r = withTokenDefaults(rules);
+  const t = (key: string) =>
+    readToken(r, { key, label: key, hint: '', fallback: '', kind: 'choice' } as Token);
+  const issues = validateContrast(r);
+  // Compact two-column form: the model reads this the same as prose but it
+  // costs roughly half the lines, which matters once the block is 20+ entries.
+  const line = (label: string, value: string) => `- ${label}: ${value}`;
+  const rows = [
+    line('Primary', r.primaryColor),
+    line('Secondary (headings)', r.secondaryColor),
+    line('Accent', r.accentColor),
+    line('Background', r.backgroundColor),
+    line('Body text', r.textColor),
+    line('Heading font', r.headingFont),
+    line('Body font', r.bodyFont),
+    line('Body copy', `${t('bodyStyle')}; line-height ${t('lineHeight')}; width ${t('measureWidth')}`),
+    line('Headings', `${t('headingStyle')}; weight ${t('headingWeight')}; h1 ${t('h1Size')}; tracking ${t('letterSpacing')}`),
+    line('Link', t('hyperlinkStyle')),
+    line('Bullets', t('bulletStyle')),
+    line('Numbering', t('numberingStyle')),
+    line('Image frame', t('imageStyle')),
+    line('Code', t('codeStyle')),
+    line('Table', t('tableStyle')),
+    line('FAQ', t('faqStyle')),
+    line('Blockquote', t('blockquoteStyle')),
+    line('Button', t('buttonStyle')),
+  ];
   return [
-    'BRAND DESIGN TOKENS (use exactly these, never substitute):',
-    `- Primary colour: ${rules.primaryColor}`,
-    `- Secondary colour (headers, accordions): ${rules.secondaryColor}`,
-    `- Accent colour (highlights, badges): ${rules.accentColor}`,
-    `- Background / neutral surface: ${rules.backgroundColor}`,
-    `- Body text colour: ${rules.textColor}`,
-    `- Heading font stack: ${rules.headingFont}`,
-    `- Body font stack: ${rules.bodyFont}`,
-    `- Button style: ${rules.buttonStyle}`,
-    `- Blockquote style: ${rules.blockquoteStyle}`,
+    'BRAND DESIGN TOKENS — use exactly these values, never substitute a colour or font:',
+    ...rows,
+    issues.length
+      ? `CONTRAST: keep body text at least 4.5:1 against the background. These pairings are already verified: ${issues
+          .map((i) => `${i.label} ${i.ratio}:1`)
+          .join(', ')}.`
+      : 'CONTRAST: keep all body text at or above 4.5:1 against the background.',
+    '',
+    'Apply every element style above as a concrete CSS decision, written as inline `style`',
+    'declarations on the element itself. Do not rely on classes or an external stylesheet.',
   ].join('\n');
 }
 

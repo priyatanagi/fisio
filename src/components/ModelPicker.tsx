@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, Loader2, RefreshCw } from 'lucide-react';
 import type { ModelCatalog, ModelInfo, ProviderType } from '../types/provider';
 import { PROVIDER_PRESETS } from '../types/provider';
+import { noAutofillProps } from '../utils/autofillGuard';
 
 export function filterModels(models: ModelInfo[], query: string): ModelInfo[] {
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -162,6 +163,8 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
             }
           }}
           placeholder="Search by name or type a model id"
+          spellCheck={false}
+          {...noAutofillProps('model-identifier')}
           className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 pr-8 text-[11px] font-mono text-zinc-100 outline-none focus:border-zinc-500"
         />
         <ChevronDown className="w-3.5 h-3.5 text-zinc-600 absolute right-2 top-2.5 pointer-events-none" />

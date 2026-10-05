@@ -3,6 +3,7 @@ import { Monitor, Tablet, Smartphone, AlertTriangle, Code2, Eye } from 'lucide-r
 import type { BrandWarning } from '../pipeline/stages';
 import type { UserProfile } from '../types/profile';
 import { applyBrandTokens } from '../utils/brandTokens';
+import { applyTokenCss, describeCompliance, verifyTokenCompliance } from '../config/tokenCss';
 
 interface HtmlPreviewPaneProps {
   html: string;
@@ -22,15 +23,30 @@ export const HtmlPreviewPane: React.FC<HtmlPreviewPaneProps> = ({ html, profile 
   const [showSource, setShowSource] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const [forcePalette, setForcePalette] = useState(false);
+  const [enforceTokens, setEnforceTokens] = useState(false);
 
-  const result = useMemo(
-    () => applyBrandTokens(html, profile.designRules, { forcePalette }),
-    [html, profile.designRules, forcePalette]
-  );
+  // Palette substitution first, then token enforcement, so a corrected colour
+  // is not immediately overwritten by the compiled declaration.
+  const result = useMemo(() => {
+    const brand = applyBrandTokens(html, profile.designRules, { forcePalette });
+    if (!enforceTokens) return { ...brand, touched: 0 };
+    const enforced = applyTokenCss(brand.html, profile.designRules);
+    return { ...brand, html: enforced.html, touched: enforced.touched };
+  }, [html, profile.designRules, forcePalette, enforceTokens]);
+
+  // Verify what the user is actually looking at, not the pre-enforcement HTML.
+  const verifyTarget = enforceTokens ? result.html : html;
 
   const warningTotal = result.warnings.reduce((sum, w) => sum + w.occurrences, 0);
   const showWarnings = result.warnings.length > 0 && !dismissed;
   const Active = VIEWPORTS[viewport].icon;
+
+  // Token compliance: proves the generated HTML actually followed the brand
+  // tokens rather than assuming it did.
+  const compliance = useMemo(
+    () => verifyTokenCompliance(verifyTarget, profile.designRules),
+    [verifyTarget, profile.designRules]
+  );
 
   if (!html) {
     return (
@@ -65,6 +81,18 @@ export const HtmlPreviewPane: React.FC<HtmlPreviewPaneProps> = ({ html, profile 
         </div>
 
         <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-[11px] text-zinc-400 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={enforceTokens}
+              onChange={(e) => {
+                setEnforceTokens(e.target.checked);
+                setDismissed(false);
+              }}
+              className="accent-zinc-400"
+            />
+            Enforce brand tokens
+          </label>
           <button
             onClick={() => setShowSource((prev) => !prev)}
             className={`px-2.5 py-1.5 rounded-lg border text-[11px] flex items-center gap-1.5 ${
@@ -78,6 +106,23 @@ export const HtmlPreviewPane: React.FC<HtmlPreviewPaneProps> = ({ html, profile 
           </button>
         </div>
       </div>
+
+      {compliance.issues.length > 0 && (
+        <div className="px-3 py-2 bg-sky-950/40 border border-sky-900 rounded-lg text-[11px] text-sky-200 flex-wrap">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          <span className="flex-1">{describeCompliance(compliance)}</span>
+          <ul className="w-full mt-1 space-y-0.5">
+            {compliance.issues.slice(0, 3).map((issue, i) => (
+              <li key={i} className="text-[10px] text-sky-200/70 font-mono">
+                {issue.label}: expected {issue.expected}, found {issue.found}
+              </li>
+            ))}
+          </ul>
+          <button onClick={() => setDismissed(true)} className="text-sky-300 hover:text-sky-100">
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {showWarnings && (
         <div className="flex items-center gap-2 px-3 py-2 bg-amber-950/40 border border-amber-900 rounded-lg text-[11px] text-amber-300 flex-wrap">
@@ -125,6 +170,7 @@ export const HtmlPreviewPane: React.FC<HtmlPreviewPaneProps> = ({ html, profile 
       <div className="text-[10px] font-mono text-zinc-600 flex items-center gap-1.5">
         <Active className="w-3 h-3" />
         {VIEWPORTS[viewport].label} — {VIEWPORTS[viewport].width} — sandboxed, opaque origin
+        {result.touched > 0 ? ` — tokens applied to ${result.touched} element(s)` : ''}
       </div>
     </div>
   );
