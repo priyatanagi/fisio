@@ -1,4 +1,5 @@
 import express from 'express';
+import { createServer, type Server } from 'node:http';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -186,28 +187,36 @@ app.post('/api/run-agent', async (req, res) => {
   }
 });
 
-function listenWithFallback(port: number, attemptsLeft: number = MAX_PORT_ATTEMPTS): Promise<number> {
+function listenWithFallback(
+  port: number,
+  server: Server,
+  attemptsLeft: number = MAX_PORT_ATTEMPTS
+): Promise<number> {
   return new Promise<number>((resolve, reject) => {
-    const server = app.listen(port, '0.0.0.0', () => {
+    server.once('listening', () => {
       console.log(`\n  Server ready - open in browser:  http://localhost:${port}\n  (bound to 0.0.0.0:${port}, reachable from other devices on your network)\n`);
       resolve(port);
     });
 
     server.once('error', (err: NodeJS.ErrnoException) => {
-      server.close();
       if (err.code !== 'EADDRINUSE' || attemptsLeft <= 1) {
         return reject(err);
       }
       console.warn(`[Server] Port ${port} is in use, trying ${port + 1}...`);
-      listenWithFallback(port + 1, attemptsLeft - 1).then(resolve, reject);
+      listenWithFallback(port + 1, server, attemptsLeft - 1).then(resolve, reject);
     });
+    server.listen(port, '0.0.0.0');
   });
 }
 
 async function startServer() {
+  const httpServer = createServer(app);
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR === 'true' ? false : { server: httpServer },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -219,7 +228,7 @@ async function startServer() {
   }
 
   try {
-    await listenWithFallback(PORT);
+    await listenWithFallback(PORT, httpServer);
   } catch (err: any) {
     console.error('[Server] Failed to start server:', err.message || err);
     process.exit(1);

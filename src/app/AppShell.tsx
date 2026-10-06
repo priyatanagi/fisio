@@ -26,8 +26,8 @@ export const AppShell: React.FC<AppShellProps> = ({
   serverStatus,
 }) => {
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex font-sans antialiased selection:bg-zinc-800">
-      <nav className="w-52 shrink-0 border-r border-zinc-900 bg-zinc-950 flex flex-col">
+    <div className="h-dvh overflow-hidden bg-zinc-950 text-zinc-100 flex font-sans antialiased selection:bg-zinc-800">
+      <nav className="h-full w-52 shrink-0 border-r border-zinc-900 bg-zinc-950 flex flex-col">
         <div className="p-4 border-b border-zinc-900 flex items-center gap-2">
           <Cpu className="w-5 h-5 text-zinc-300" />
           <div className="min-w-0">
@@ -83,7 +83,7 @@ export const AppShell: React.FC<AppShellProps> = ({
         </div>
       </nav>
 
-      <main className="flex-1 min-w-0 h-100dvh overflow-y-auto">{children}</main>
+      <main className="flex-1 min-w-0 min-h-0 overflow-y-auto">{children}</main>
     </div>
   );
 };
