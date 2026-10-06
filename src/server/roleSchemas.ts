@@ -2,6 +2,7 @@ import type {
   AnyRole,
   CreatorOutput,
   DesignerOutput,
+  ImproverOutput,
   ImpowerOutput,
   JudgeOutput,
   KeywordResearch,
@@ -167,6 +168,11 @@ function validateDesigner(obj: Record<string, unknown>): ValidationResult<Design
   return { ok: true, data: { html: str(obj.html), warnings: [] } };
 }
 
+function validateImprover(obj: Record<string, unknown>): ValidationResult<ImproverOutput> {
+  if (!str(obj.html)) return { ok: false, error: 'improver output is missing html' };
+  return { ok: true, data: { html: str(obj.html), changes: strList(obj.changes) } };
+}
+
 function validateResearch(obj: Record<string, unknown>): ValidationResult<KeywordResearch> {
   if (!str(obj.primaryKeyword)) {
     return { ok: false, error: 'keyword research output is missing primaryKeyword' };
@@ -198,6 +204,8 @@ export function validateRoleOutput(role: AnyRole, raw: string): ValidationResult
       return validateReviewer(obj);
     case 'designer':
       return validateDesigner(obj);
+    case 'improver':
+      return validateImprover(obj);
     case 'research':
       return validateResearch(obj);
     default:

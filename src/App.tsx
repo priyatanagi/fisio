@@ -219,6 +219,7 @@ export default function App() {
       content = (
         <GenerateView
           profile={profile}
+          multiAgentConfig={multiAgentConfig}
           pipelineConfig={pipelineConfig}
           onPipelineChange={handleSavePipeline}
           articles={articles}

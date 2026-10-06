@@ -8,8 +8,8 @@ export interface DesignRules {
   textColor: string;
   headingFont: string;
   bodyFont: string;
-  buttonStyle: 'rounded' | 'square' | 'pill';
-  blockquoteStyle: 'accent-bar' | 'card' | 'plain' | 'centered';
+  buttonStyle: string;
+  blockquoteStyle: string;
 
   // Element and block styling. Optional because profiles saved before these
   // tokens existed must still load; readToken()/withTokenDefaults() in
@@ -17,7 +17,7 @@ export interface DesignRules {
   bodyStyle?: string;
   headingStyle?: string;
   lineHeight?: string;
-  measureWidth?: string;
+  textAlignment?: string;
   h1Size?: string;
   headingWeight?: string;
   letterSpacing?: string;
@@ -67,6 +67,7 @@ export const DEFAULT_USER_PROFILE: UserProfile = {
     textColor: '#333940',
     headingFont: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
     bodyFont: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+    textAlignment: 'left',
     buttonStyle: 'rounded',
     blockquoteStyle: 'accent-bar',
   },

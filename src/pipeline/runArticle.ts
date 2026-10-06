@@ -21,6 +21,8 @@ import { resolveTopicForRun } from './topicFidelity';
 import { runAgent, AgentError } from './runAgent';
 import { extractDocument } from '../utils/document';
 import { readabilityFromText } from '../utils/readability';
+import { normalizeRenderedHtml } from '../utils/articleShell';
+import { seedMetadataVersions } from '../utils/metadataVersions';
 import { scoreDraft, type ArticleScore } from './scoreArticle';
 
 export interface RunArticleOptions {
@@ -39,6 +41,21 @@ export interface RunArticleOptions {
 }
 
 const DESIGNER_CONCURRENCY = 2;
+
+/**
+ * Internal roles run on a user-configured role's provider: keyword research on
+ * Impower, article repair on the Designer. They are not provider slots of their
+ * own, so the provider UI stays at five roles.
+ */
+const PROVIDER_FOR_ROLE: Record<AnyRole, keyof MultiAgentConfig> = {
+  judge: 'judge',
+  impower: 'impower',
+  creator: 'creator',
+  reviewer: 'reviewer',
+  designer: 'designer',
+  research: 'impower',
+  improver: 'designer',
+};
 
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -77,7 +94,7 @@ function makeCall(options: RunArticleOptions) {
       role,
       input,
       userProfile: profile,
-      providerConfig: multiAgentConfig[role === 'research' ? 'impower' : role],
+      providerConfig: multiAgentConfig[PROVIDER_FOR_ROLE[role]],
       universalRules,
       signal,
       runId,
@@ -188,18 +205,44 @@ async function runDesignerStage(
   onStage('designing', 'Rendering HTML formats...');
   const targets = formatTargets(config.targetFormats, config.languages);
 
-  const rendered = await mapWithConcurrency(targets, DESIGNER_CONCURRENCY, async (target) => {
-    const output = await call('designer', {
-      markdown: params.creator.markdownContent,
-      language: target.language,
-      cssMode: target.cssMode,
-    });
-    return { id: target.id, html: output?.html ?? '', warnings: output?.warnings ?? [] };
-  });
+  // The languages are generated independently, so they drift: one ships a header
+  // block and a centred H1 the other has no styling for at all. Within a CSS
+  // mode the first language renders freely and becomes the structure reference
+  // for the rest, which is why a mode renders its languages in order rather
+  // than in parallel. Modes are independent, so they still run concurrently.
+  const byMode = new Map<CssMode, typeof targets>();
+  for (const target of targets) {
+    const group = byMode.get(target.cssMode) ?? [];
+    group.push(target);
+    byMode.set(target.cssMode, group);
+  }
+
+  const rendered = await mapWithConcurrency(
+    [...byMode.values()],
+    DESIGNER_CONCURRENCY,
+    async (group) => {
+      const results: { id: string; html: string; warnings: BrandWarning[] }[] = [];
+      for (const target of group) {
+        const reference = results[0]?.html;
+        const output = await call('designer', {
+          markdown: params.creator.markdownContent,
+          language: target.language,
+          cssMode: target.cssMode,
+          referenceHtml: reference,
+        });
+        results.push({
+          id: target.id,
+          html: normalizeRenderedHtml(output?.html ?? '', reference),
+          warnings: output?.warnings ?? [],
+        });
+      }
+      return results;
+    }
+  );
 
   const formatsBundle: Record<string, string> = {};
   const allWarnings: BrandWarning[] = [];
-  for (const r of rendered) {
+  for (const r of rendered.flat()) {
     formatsBundle[r.id] = r.html;
     allWarnings.push(...r.warnings);
   }
@@ -442,17 +485,29 @@ function buildArticle(params: BuildArticleParams): GeneratedArticle {
       tags: [],
     } as GeneratedArticle['seoMetadata']);
 
-  const inlineCssHtml = formatsBundle['inline-en'] || formatsBundle['inline-id'] || '';
-  const cleanHtml = formatsBundle['clean-en'] || formatsBundle['clean-id'] || '';
+  // Top-level mirrors name their own language only. Falling back to the other
+  // language let a run that rendered just clean-id report that markup as the
+  // English clean HTML, which then exported under the wrong filename.
+  const inlineCssHtml = formatsBundle['inline-en'] ?? '';
+  const cleanHtml = formatsBundle['clean-en'] ?? '';
 
   // Measure the HTML that ships when a format rendered, else the draft itself. A run that
   // produced neither measures nothing and keeps a zero, which every surface reads as absent.
-  const renderedHtml = inlineCssHtml || cleanHtml;
+  //
+  // The document and its language are chosen together. Picking the document by
+  // availability but the language from the configured list scored Indonesian
+  // prose with English syllable rules, which drove Flesch to the floor and
+  // reported 0 for a readable article.
+  const measured = (['inline-en', 'inline-id', 'clean-en', 'clean-id'] as const)
+    .map((id) => ({ id, html: formatsBundle[id] ?? '' }))
+    .find((entry) => entry.html.trim().length > 0);
+  const renderedHtml = measured?.html ?? '';
+  const measuredLanguage: 'en' | 'id' = measured ? (measured.id.endsWith('-id') ? 'id' : 'en') : language;
   const fleschScore = readabilityFromText(
     renderedHtml
       ? extractDocument(renderedHtml, 'html').text
       : extractDocument(markdown, 'markdown').text,
-    language
+    measuredLanguage
   ).fleschReadingEase;
 
   // Scored from the markdown that ships, so a stored article is never left unscored.
@@ -463,8 +518,10 @@ function buildArticle(params: BuildArticleParams): GeneratedArticle {
       metadata,
       metadata.focusKeyphrase || options.focusKeyphrase,
       options.config.targetWords,
-      language
+      measuredLanguage
     );
+
+  const generatedAt = new Date().toISOString();
 
   return {
     id: params.articleId ?? `art_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -479,6 +536,9 @@ function buildArticle(params: BuildArticleParams): GeneratedArticle {
     seoMetadata: metadata,
     seoMetadataEn: options.config.languages.includes('en') ? metadata : undefined,
     seoMetadataId: options.config.languages.includes('id') ? metadata : undefined,
+    // Version 1 is the pipeline's own output, so the original is always
+    // recoverable no matter how many times the metadata is edited afterwards.
+    metadataVersions: seedMetadataVersions(metadata, generatedAt),
     inlineCssHtml,
     cleanHtml,
     imagePrompts: [],
@@ -487,7 +547,7 @@ function buildArticle(params: BuildArticleParams): GeneratedArticle {
       readingTimeMinutes: Math.max(1, Math.ceil(wordCount / 200)),
       fleschScore,
     },
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     rawText: markdown,
     providerUsed: `${options.multiAgentConfig.creator.provider.toUpperCase()}: ${options.multiAgentConfig.creator.model}`,
     pipelineConfig: options.config,

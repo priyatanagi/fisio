@@ -13,6 +13,7 @@ describe('token catalog', () => {
       expect.arrayContaining([
         'primaryColor', 'secondaryColor', 'accentColor', 'backgroundColor', 'textColor',
         'headingFont', 'bodyFont', 'bodyStyle', 'headingStyle',
+        'textAlignment',
         'hyperlinkStyle', 'bulletStyle', 'numberingStyle', 'imageStyle', 'codeStyle',
         'blockquoteStyle', 'tableStyle', 'faqStyle', 'buttonStyle',
       ])

@@ -86,7 +86,7 @@ export const BrandKitPanel: React.FC<BrandKitPanelProps> = ({
       )}
 
       {/* Presets (#4) */}
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         {BRAND_PRESETS.map((preset) => (
           <button
             key={preset.id}

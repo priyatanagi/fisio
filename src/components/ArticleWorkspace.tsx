@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   Copy,
   Check,
@@ -38,16 +38,34 @@ import {
   Sliders,
   Undo2,
   AlertCircle,
+  Lock,
+  History,
 } from 'lucide-react';
-import { GeneratedArticle, OutputFormatId } from '../types/article';
+import { GeneratedArticle, OutputFormatId, SeoMetadata } from '../types/article';
 import type { UserProfile } from '../types/profile';
+import type { MultiAgentConfig } from '../types/provider';
 import { copyToClipboard, downloadFile, downloadAllAsZip } from '../utils/exportUtils';
 import { ReadabilityScorecard } from './ReadabilityScorecard';
 import { SeoChecklistPanel } from './SeoChecklistPanel';
-import { HtmlPreviewPane } from './HtmlPreviewPane';
 import { isCleanHtmlIncomplete, synthesizeCleanHtml } from '../utils/cleanHtmlUtils';
+import { improveArticle } from '../pipeline/improveArticle';
+import { normalizeRenderedHtml } from '../utils/articleShell';
+import { scoreHtml } from '../pipeline/scoreHtml';
+import {
+  appendMetadataVersion,
+  formatVersionStamp,
+  metadataDiff,
+  restoreMetadataVersion,
+  versionsFor,
+} from '../utils/metadataVersions';
+import {
+  appendContentVersion,
+  contentVersionsFor,
+  restoreContentVersion,
+} from '../utils/contentVersions';
+import { lineDiff, wordDiff, type LineDiffEntry } from '../utils/diff';
 
-export type BottomTab = 'flesch' | 'checklist' | 'seo' | 'prompts' | 'preview';
+export type BottomTab = 'flesch' | 'checklist' | 'seo' | 'prompts';
 
 interface ArticleWorkspaceProps {
   article: GeneratedArticle;
@@ -55,6 +73,7 @@ interface ArticleWorkspaceProps {
   activeFormat?: OutputFormatId;
   onSelectFormat?: (format: OutputFormatId) => void;
   profile: UserProfile;
+  multiAgentConfig: MultiAgentConfig;
   /** Present only when the strict reviewer halted this article. */
   onRetryCreator?: () => void;
   onSkipToDesigner?: () => void;
@@ -87,17 +106,168 @@ const FORMAT_OPTIONS: { id: OutputFormatId; name: string; lang: 'en' | 'id'; des
   },
 ];
 
+/**
+ * Inline word-level marked diff for one metadata field: unchanged words plain,
+ * removed words struck through in red, added words green. `from` is the saved
+ * version, `to` the metadata currently in play.
+ */
+const WordDiffText: React.FC<{ from: string; to: string }> = ({ from, to }) => (
+  <>
+    {wordDiff(from, to).map((token, index) => {
+      if (token.type === 'del') {
+        return (
+          <span
+            key={index}
+            className="text-rose-400 bg-rose-950/40 line-through decoration-rose-500/70"
+          >
+            {token.text}
+          </span>
+        );
+      }
+      if (token.type === 'add') {
+        return (
+          <span key={index} className="text-emerald-400 bg-emerald-950/40">
+            {token.text}
+          </span>
+        );
+      }
+      return (
+        <span key={index} className="text-zinc-400">
+          {token.text}
+        </span>
+      );
+    })}
+  </>
+);
+
+const MAX_DIFF_ROWS = 2000;
+const SAME_RUN_COLLAPSE = 6;
+
+/**
+ * Line-level marked diff of a saved snapshot against the buffer in play.
+ * Long unchanged runs collapse to an ellipsis so a small edit deep inside a
+ * long document is still findable; output is capped so a pathological pair of
+ * documents cannot lock the panel.
+ */
+const LineDiffView: React.FC<{ from: string; to: string }> = ({ from, to }) => {
+  const entries = lineDiff(from, to);
+
+  if (entries.every((entry) => entry.type === 'same')) {
+    return (
+      <p className="text-[11px] font-mono text-zinc-500">
+        No differences from the current buffer.
+      </p>
+    );
+  }
+
+  const truncated = entries.length > MAX_DIFF_ROWS;
+  const shown = truncated ? entries.slice(0, MAX_DIFF_ROWS) : entries;
+
+  type Row = { kind: 'line'; entry: LineDiffEntry } | { kind: 'gap'; count: number };
+  const rows: Row[] = [];
+  let index = 0;
+  while (index < shown.length) {
+    const entry = shown[index];
+    if (entry.type !== 'same') {
+      rows.push({ kind: 'line', entry });
+      index++;
+      continue;
+    }
+    let run = 0;
+    while (index + run < shown.length && shown[index + run].type === 'same') run++;
+    if (run > SAME_RUN_COLLAPSE) {
+      for (let k = 0; k < 3; k++) rows.push({ kind: 'line', entry: shown[index + k] });
+      rows.push({ kind: 'gap', count: run - 6 });
+      for (let k = run - 3; k < run; k++) rows.push({ kind: 'line', entry: shown[index + k] });
+    } else {
+      for (let k = 0; k < run; k++) rows.push({ kind: 'line', entry: shown[index + k] });
+    }
+    index += run;
+  }
+
+  return (
+    <div className="max-h-64 overflow-auto rounded-md border border-zinc-800 bg-zinc-950">
+      {rows.map((row, i) =>
+        row.kind === 'gap' ? (
+          <div
+            key={i}
+            className="px-2 py-1 text-center text-[10px] font-mono text-zinc-600 border-y border-zinc-900"
+          >
+            … {row.count} unchanged line{row.count === 1 ? '' : 's'} …
+          </div>
+        ) : (
+          <div
+            key={i}
+            className={`flex gap-2 px-2 py-0.5 ${
+              row.entry.type === 'del'
+                ? 'bg-rose-950/30'
+                : row.entry.type === 'add'
+                  ? 'bg-emerald-950/30'
+                  : ''
+            }`}
+          >
+            <span
+              className={`w-3 shrink-0 select-none text-[10px] font-mono ${
+                row.entry.type === 'del'
+                  ? 'text-rose-500'
+                  : row.entry.type === 'add'
+                    ? 'text-emerald-500'
+                    : 'text-zinc-700'
+              }`}
+            >
+              {row.entry.type === 'del' ? '-' : row.entry.type === 'add' ? '+' : ' '}
+            </span>
+            <span
+              className={`min-w-0 whitespace-pre-wrap break-all font-mono text-[11px] ${
+                row.entry.type === 'del'
+                  ? 'text-rose-300'
+                  : row.entry.type === 'add'
+                    ? 'text-emerald-300'
+                    : 'text-zinc-500'
+              }`}
+            >
+              {row.entry.text || ' '}
+            </span>
+          </div>
+        )
+      )}
+      {truncated && (
+        <div className="border-t border-zinc-900 px-2 py-1 text-center text-[10px] font-mono text-amber-500/80">
+          Diff truncated at {MAX_DIFF_ROWS} lines
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
   article,
   onUpdateArticle,
   activeFormat: controlledFormat,
   onSelectFormat,
   profile,
+  multiAgentConfig,
   onRetryCreator,
   onSkipToDesigner,
 }) => {
-  // Active Format for Results panel
-  const [internalFormat, setInternalFormat] = useState<OutputFormatId>('inline-en');
+  /**
+   * Formats this run actually produced. A format that was not checked was never
+   * rendered, so it is offered as a locked entry rather than shown as editable:
+   * opening one would present an empty editor as though it held a result.
+   */
+  const generatedFormats = useMemo<OutputFormatId[]>(
+    () =>
+      (Object.keys(article.formats ?? {}) as OutputFormatId[]).filter(
+        (id) => Boolean(article.formats[id]?.trim())
+      ),
+    [article.formats]
+  );
+  const isGenerated = (id: OutputFormatId) => generatedFormats.includes(id);
+
+  // Active Format for Results panel. Defaults to the first format this run made,
+  // so opening the results never lands on a format that was not generated.
+  const firstGenerated = generatedFormats[0] ?? 'inline-en';
+  const [internalFormat, setInternalFormat] = useState<OutputFormatId>(firstGenerated);
   const selectedFormat = controlledFormat || internalFormat;
 
   const handleSetFormat = (fmt: OutputFormatId) => {
@@ -118,8 +288,9 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
   // AI Improve drawer & execution state
   const [showImproveDrawer, setShowImproveDrawer] = useState(false);
   const [improveInstruction, setImproveInstruction] = useState('');
-  const [isImproving] = useState(false);
+  const [isImproving, setIsImproving] = useState(false);
   const [improveError, setImproveError] = useState<string | null>(null);
+  const [improveLog, setImproveLog] = useState<string[]>([]);
   const [undoStack, setUndoStack] = useState<{ format: OutputFormatId; html: string }[]>([]);
 
   // Refs
@@ -143,69 +314,120 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  // Safe getter for the current format content (automatically fills clean-en/clean-id if incomplete)
-  const getCurrentFormatContent = (): string => {
-    let content = article.formats[selectedFormat] || '';
+  /**
+   * The HTML stored for a format, repaired when a clean render came back
+   * truncated. Memoised because it is derived work, not a value.
+   */
+  const storedContent = useMemo((): string => {
+    // Articles generated before the shell rules existed still carry the grey page
+    // background and the width cap. They are normalized on the way in, so opening
+    // one shows and edits the corrected document rather than the old artefact.
+    const content = normalizeRenderedHtml(article.formats[selectedFormat] || '');
 
-    // Safeguard: If clean-en or clean-id is incomplete/empty/ellipsized, synthesize immediately
-    if (selectedFormat === 'clean-en') {
+    if (selectedFormat === 'clean-en' || selectedFormat === 'clean-id') {
       if (isCleanHtmlIncomplete(content)) {
-        const synthesized = synthesizeCleanHtml(
-          article.formats['inline-en'] || article.inlineCssHtml,
+        const sibling = selectedFormat === 'clean-en' ? 'inline-en' : 'inline-id';
+        return synthesizeCleanHtml(
+          article.formats[sibling] || article.inlineCssHtml,
           content,
           article.topic
         );
-        return synthesized;
       }
-      return content || article.cleanHtml;
     }
 
-    if (selectedFormat === 'clean-id') {
-      if (isCleanHtmlIncomplete(content)) {
-        const synthesized = synthesizeCleanHtml(
-          article.formats['inline-id'] || article.inlineCssHtml,
-          content,
-          article.topic
-        );
-        return synthesized;
-      }
-      return content || article.cleanHtml;
-    }
-
+    // Older articles stored the English render in the top-level mirrors. Read
+    // them as a fallback but never past an empty string, so an article that
+    // rendered no such format yields an empty buffer rather than undefined.
     if (selectedFormat === 'inline-en') {
-      return content || article.inlineCssHtml;
+      return content || normalizeRenderedHtml(article.inlineCssHtml || '');
     }
-
-    if (selectedFormat === 'inline-id') {
-      return content || article.inlineCssHtml;
+    if (selectedFormat === 'clean-en') {
+      return content || normalizeRenderedHtml(article.cleanHtml || '');
     }
+    return content;
+  }, [article.formats, article.inlineCssHtml, article.cleanHtml, article.topic, selectedFormat]);
 
-    return content || article.inlineCssHtml;
+  /**
+   * The editor holds its own copy of the document.
+   *
+   * It used to render straight from the article, so every keystroke published a
+   * new article, which came back down as a changed `value` and pushed the caret
+   * to the end of the field. The buffer is local, and persistence is debounced
+   * behind it, so typing is never interrupted by a round trip.
+   */
+  const [draft, setDraft] = useState(storedContent);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+
+  // Re-seed the buffer when the reader switches format or article, but never
+  // while they are typing in the one they are on.
+  useEffect(() => {
+    setDraft(storedContent);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedFormat, article.id]);
+
+  const commitRef = useRef<number | null>(null);
+  const persistDraft = useCallback(
+    (format: OutputFormatId, content: string) => {
+      onUpdateArticle({
+        ...article,
+        formats: { ...article.formats, [format]: content },
+        // The top-level mirrors name their own language; they are not a fallback
+        // for the other one.
+        ...(format === 'inline-en' ? { inlineCssHtml: content } : {}),
+        ...(format === 'clean-en' ? { cleanHtml: content } : {}),
+      });
+    },
+    [article, onUpdateArticle]
+  );
+
+  /** Debounced write of the buffer to the article, so scoring and export see edits. */
+  const schedulePersist = useCallback(
+    (format: OutputFormatId, content: string) => {
+      if (commitRef.current !== null) window.clearTimeout(commitRef.current);
+      commitRef.current = window.setTimeout(() => {
+        commitRef.current = null;
+        persistDraft(format, content);
+      }, 400);
+    },
+    [persistDraft]
+  );
+
+  // A pending edit must not be lost when the reader leaves the panel.
+  useEffect(
+    () => () => {
+      if (commitRef.current !== null) {
+        window.clearTimeout(commitRef.current);
+        persistDraft(selectedFormat, draftRef.current);
+      }
+    },
+    [selectedFormat, persistDraft]
+  );
+
+  const handleDraftChange = (next: string) => {
+    setDraft(next);
+    schedulePersist(selectedFormat, next);
   };
 
-  // Updater for the current format content
+  const currentContent = draft;
+
+  // Updater for the current format content. Writes immediately, because these
+  // are deliberate edits (a toolbar insert, prettify, an AI repair) rather than
+  // keystrokes.
   const updateCurrentFormatContent = (newContent: string) => {
-    const updatedFormats = {
-      ...article.formats,
-      [selectedFormat]: newContent,
-    };
-
-    onUpdateArticle({
-      ...article,
-      formats: updatedFormats,
-      // If updating inline-en or clean-en, sync top-level attributes too
-      ...(selectedFormat === 'inline-en' ? { inlineCssHtml: newContent } : {}),
-      ...(selectedFormat === 'clean-en' ? { cleanHtml: newContent } : {}),
-    });
+    setDraft(newContent);
+    persistDraft(selectedFormat, newContent);
   };
 
-  // Sync Live Iframe Preview when selected format or code changes
+  // Sync Live Iframe Preview when the buffer changes. Driven by the local draft
+  // rather than the article, so the preview follows the keystroke instead of the
+  // debounced write.
   useEffect(() => {
     if (iframeRef.current) {
       const doc = iframeRef.current.contentDocument || iframeRef.current.contentWindow?.document;
       if (doc) {
         doc.open();
-        const content = getCurrentFormatContent();
+        const content = draft;
         const fullDoc = content.includes('<!DOCTYPE html>')
           ? content
           : `<!DOCTYPE html>
@@ -216,10 +438,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
     <style>
       body {
         margin: 0;
-        padding: 20px 16px;
-        background: #ffffff;
-        color: #333940;
-        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        padding: 0;
       }
     </style>
   </head>
@@ -231,7 +450,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
         doc.close();
       }
     }
-  }, [selectedFormat, article]);
+  }, [draft, selectedFormat]);
 
   // Insert HTML Tag at cursor / wrap selected text in code editor
   const insertHtmlTag = (tagOpen: string, tagClose: string = '', defaultPlaceholder: string = '') => {
@@ -240,43 +459,47 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
 
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
-    const currentVal = getCurrentFormatContent();
+    const currentVal = draftRef.current;
     const selectedText = currentVal.substring(start, end) || defaultPlaceholder;
 
     const replacement = `${tagOpen}${selectedText}${tagClose}`;
     const updated = currentVal.substring(0, start) + replacement + currentVal.substring(end);
 
+    setUndoStack((stack) => [...stack, { format: selectedFormat, html: currentVal }].slice(-30));
     updateCurrentFormatContent(updated);
 
-    setTimeout(() => {
+    // Restore the selection over the text that was wrapped. Without this the
+    // caret lands at the end of the document after every toolbar insert.
+    requestAnimationFrame(() => {
       textarea.focus();
       textarea.setSelectionRange(
         start + tagOpen.length,
         start + tagOpen.length + selectedText.length
       );
-    }, 10);
+    });
   };
 
   // Clean / Prettify Indentations
   const handlePrettifyHtml = () => {
-    const raw = getCurrentFormatContent();
+    const raw = draftRef.current;
     const cleaned = raw
       .replace(/>\s*</g, '>\n<')
       .replace(/\n\s*\n/g, '\n')
       .trim();
+    setUndoStack((stack) => [...stack, { format: selectedFormat, html: raw }].slice(-30));
     updateCurrentFormatContent(cleaned);
     showCopyFeedback('prettified');
   };
 
   // Copy code of active format
   const handleCopyCode = async () => {
-    const success = await copyToClipboard(getCurrentFormatContent());
+    const success = await copyToClipboard(currentContent);
     if (success) showCopyFeedback('code');
   };
 
   // Copy plain text of active format
   const handleCopyCleanText = async () => {
-    const stripped = getCurrentFormatContent()
+    const stripped = currentContent
       .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
       .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
       .replace(/<[^>]+>/g, ' ')
@@ -289,9 +512,9 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
 
   // Export active format HTML file
   const handleDownloadFile = () => {
-    const slug = article.seoMetadata.urlSlug || 'commercial-fitness-article';
+    const slug = metaDraft.urlSlug || 'commercial-fitness-article';
     const filename = `${slug}-${selectedFormat}.html`;
-    downloadFile(filename, getCurrentFormatContent(), 'text/html;charset=utf-8');
+    downloadFile(filename, currentContent, 'text/html;charset=utf-8');
     showCopyFeedback('download');
   };
 
@@ -306,27 +529,260 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
     }
   };
 
-  // AI Improve — the /api/improve-article route was removed in Task 7. Targeted
-  // edits now flow through the Reviewer revision loop, so this surfaces a notice
-  // instead of calling a dead endpoint.
-  const handleRunImprovement = (_instructionToUse?: string) => {
-    setImproveError(
-      'Targeted improvements are now applied by the Reviewer loop. Set Reviewer to Strict and regenerate, or edit the HTML directly in the Preview source view.'
-    );
+  /**
+   * Ask the agent to repair this format.
+   *
+   * The call carries the measured context -- the checks currently failing, the
+   * reviewer's issues, the brief and the brand tokens -- so the agent fixes a
+   * named problem instead of rewriting the article on a hunch. The editor keeps
+   * its buffer, so an unsaved edit is what gets repaired and the result lands in
+   * the editor, undoable like any other change.
+   */
+  const handleRunImprovement = async (instructionToUse?: string) => {
+    const instruction = (instructionToUse ?? improveInstruction).trim();
+    if (isImproving) return;
+    setIsImproving(true);
+    setImproveError(null);
+    setImproveLog([]);
+
+    try {
+      const result = await improveArticle({
+        article,
+        format: selectedFormat,
+        html: draftRef.current,
+        instruction,
+        score: liveScore,
+        profile,
+        multiAgentConfig,
+        signal: new AbortController().signal,
+      });
+
+      if (!result.html.trim()) {
+        setImproveError('The agent returned no HTML. Try rephrasing the instruction.');
+        return;
+      }
+
+      setUndoStack((stack) =>
+        [...stack, { format: selectedFormat, html: draftRef.current }].slice(-30)
+      );
+      updateCurrentFormatContent(result.html);
+      setImproveLog(result.changes);
+      showCopyFeedback('improved');
+    } catch (err) {
+      setImproveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsImproving(false);
+    }
   };
 
   // Undo last edit/improvement
   const handleUndo = () => {
     if (undoStack.length === 0) return;
-    const [previous, ...rest] = undoStack;
-    updateCurrentFormatContent(previous.html);
-    setUndoStack(rest);
+    // Undo walks back to the most recent entry for this format; an edit to one
+    // format must not roll back a different one.
+    const index = undoStack.map((entry) => entry.format).lastIndexOf(selectedFormat);
+    if (index < 0) return;
+    const next = undoStack.slice(0, index);
+    setUndoStack(next);
+    updateCurrentFormatContent(undoStack[index].html);
     showCopyFeedback('undone');
   };
 
+  // ---- SEO metadata editing + versioning -----------------------------------
+  /**
+   * The metadata fields keep their own buffer for the same reason the HTML
+   * editor does. They were bound straight to the article, so every keystroke
+   * published a new article, came back down as a changed `value`, and threw
+   * the character away — typing did nothing.
+   */
+  const [metaDraft, setMetaDraft] = useState(article.seoMetadata);
+  const metaRef = useRef(metaDraft);
+  metaRef.current = metaDraft;
+
+  useEffect(() => {
+    setMetaDraft(article.seoMetadata);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [article.id]);
+
+  const metaCommitRef = useRef<number | null>(null);
+  const persistMetadata = useCallback(
+    (metadata: SeoMetadata) => {
+      onUpdateArticle({
+        ...article,
+        seoMetadata: metadata,
+        focusKeyphrase: metadata.focusKeyphrase || article.focusKeyphrase,
+        seoMetadataEn: article.seoMetadataEn,
+        seoMetadataId: article.seoMetadataId,
+      });
+    },
+    [article, onUpdateArticle]
+  );
+
+  const handleMetaChange = (patch: Partial<SeoMetadata>) => {
+    const next = { ...metaRef.current, ...patch };
+    setMetaDraft(next);
+    if (metaCommitRef.current !== null) window.clearTimeout(metaCommitRef.current);
+    metaCommitRef.current = window.setTimeout(() => {
+      metaCommitRef.current = null;
+      persistMetadata(next);
+    }, 400);
+  };
+
+  useEffect(
+    () => () => {
+      if (metaCommitRef.current !== null) {
+        window.clearTimeout(metaCommitRef.current);
+        persistMetadata(metaRef.current);
+      }
+    },
+    [persistMetadata]
+  );
+
+  const metadataVersions = versionsFor(
+    article.metadataVersions,
+    article.seoMetadata,
+    article.generatedAt
+  );
+  const [versionLabel, setVersionLabel] = useState('');
+  const [restoredFrom, setRestoredFrom] = useState<number | null>(null);
+
+  const saveMetadataVersion = (label?: string) => {
+    // Commit any pending keystroke first, so the version records what is on
+    // screen rather than the last debounced write.
+    if (metaCommitRef.current !== null) {
+      window.clearTimeout(metaCommitRef.current);
+      metaCommitRef.current = null;
+    }
+    const next = appendMetadataVersion(metadataVersions, metaDraft, {
+      label: label ?? (versionLabel.trim() ? versionLabel : undefined),
+    });
+    onUpdateArticle({ ...article, seoMetadata: metaDraft, metadataVersions: next });
+    setRestoredFrom(null);
+    setVersionLabel('');
+    showCopyFeedback('metaVersion');
+  };
+
+  const restoreMetadata = (version: number) => {
+    const restored = restoreMetadataVersion(metadataVersions, version);
+    if (!restored) return;
+    setMetaDraft(restored.metadata);
+    onUpdateArticle({
+      ...article,
+      seoMetadata: restored.metadata,
+      focusKeyphrase: restored.metadata.focusKeyphrase || article.focusKeyphrase,
+      seoMetadataEn: article.seoMetadataEn,
+      seoMetadataId: article.seoMetadataId,
+      metadataVersions: restored.versions,
+    });
+    setRestoredFrom(version);
+    showCopyFeedback('metaRestored');
+  };
+
+  // ---- Article content versioning ------------------------------------------
+  const contentVersions = contentVersionsFor(article.contentVersions, selectedFormat);
+  const [contentVersionLabel, setContentVersionLabel] = useState('');
+  const [contentRestoredFrom, setContentRestoredFrom] = useState<number | null>(null);
+  /**
+   * Diff-first browsing: selecting a version expands its marked diff against
+   * what is in play; the editor buffer only changes when Restore is confirmed.
+   */
+  const [openDiff, setOpenDiff] = useState<{ kind: 'meta' | 'content'; version: number } | null>(
+    null
+  );
+  const toggleDiff = (kind: 'meta' | 'content', version: number) =>
+    setOpenDiff((previous) =>
+      previous && previous.kind === kind && previous.version === version
+        ? null
+        : { kind, version }
+    );
+
+  const formatName =
+    FORMAT_OPTIONS.find((option) => option.id === selectedFormat)?.name ?? selectedFormat;
+
+  /** Pins the buffer of the current format as a new snapshot in version storage. */
+  const saveContentVersion = () => {
+    // Commit any pending keystroke first, so the snapshot and the stored
+    // article describe the same bytes rather than the last debounced write.
+    if (commitRef.current !== null) {
+      window.clearTimeout(commitRef.current);
+      commitRef.current = null;
+    }
+    const html = draftRef.current;
+    const next = appendContentVersion(article.contentVersions, html, selectedFormat, {
+      label: contentVersionLabel,
+    });
+    onUpdateArticle({
+      ...article,
+      formats: { ...article.formats, [selectedFormat]: html },
+      ...(selectedFormat === 'inline-en' ? { inlineCssHtml: html } : {}),
+      ...(selectedFormat === 'clean-en' ? { cleanHtml: html } : {}),
+      contentVersions: next,
+    });
+    setContentVersionLabel('');
+    showCopyFeedback('contentVersion');
+  };
+
+  const restoreContent = (version: number) => {
+    const restored = restoreContentVersion(article.contentVersions, version);
+    if (!restored) return;
+    if (commitRef.current !== null) {
+      window.clearTimeout(commitRef.current);
+      commitRef.current = null;
+    }
+
+    const formats = { ...article.formats };
+    const mirrorPatch: Partial<Pick<GeneratedArticle, 'inlineCssHtml' | 'cleanHtml'>> = {};
+    // Restore is a deliberate edit like the toolbar actions, so the content it
+    // replaces is pushed for undo. The reader can only click a snapshot of the
+    // format they are on, but the flush below keeps a cross-format restore from
+    // dropping an unsaved edit of the format being left behind.
+    const previousHtml =
+      restored.format === selectedFormat
+        ? draftRef.current
+        : (article.formats[restored.format] ?? '');
+    setUndoStack((stack) => [...stack, { format: restored.format, html: previousHtml }].slice(-30));
+    if (restored.format !== selectedFormat) {
+      formats[selectedFormat] = draftRef.current;
+      if (selectedFormat === 'inline-en') mirrorPatch.inlineCssHtml = draftRef.current;
+      if (selectedFormat === 'clean-en') mirrorPatch.cleanHtml = draftRef.current;
+    }
+    formats[restored.format] = restored.html;
+    if (restored.format === 'inline-en') mirrorPatch.inlineCssHtml = restored.html;
+    if (restored.format === 'clean-en') mirrorPatch.cleanHtml = restored.html;
+
+    onUpdateArticle({
+      ...article,
+      formats,
+      ...mirrorPatch,
+      contentVersions: restored.versions,
+    });
+    if (restored.format !== selectedFormat) handleSetFormat(restored.format);
+    setDraft(restored.html);
+    setOpenDiff(null);
+    setContentRestoredFrom(version);
+  };
+
+  /**
+   * Live scoring, measured on both buffers as the reader types: the HTML being
+   * edited and the metadata being typed. The same deterministic checks the
+   * pipeline scores with, so the number here is the number that will be stored,
+   * and tightening the SEO title moves the score before the debounce fires.
+   */
+  const liveScore = useMemo(
+    () =>
+      scoreHtml(
+        draft,
+        metaDraft,
+        metaDraft.focusKeyphrase,
+        article.targetWordCount,
+        selectedFormat.endsWith('-id') ? 'id' : 'en'
+      ),
+    [draft, metaDraft, article.targetWordCount, selectedFormat]
+  );
+
   // Calculate live stats of current format
   const currentFormatStats = useMemo(() => {
-    const content = getCurrentFormatContent();
+    const content = draft ?? '';
     const stripped = content
       .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
       .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
@@ -336,15 +792,27 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
     const chars = content.length;
     const readMins = Math.max(1, Math.ceil(words / 200));
     return { words, chars, readMins };
-  }, [selectedFormat, article]);
+  }, [draft]);
 
   const activeFormatMeta = FORMAT_OPTIONS.find((f) => f.id === selectedFormat) || FORMAT_OPTIONS[0];
 
   // A zero means the run measured nothing, so it is shown as absent rather than as a score.
-  const measuredFlesch =
-    typeof article.metrics.fleschScore === 'number' && article.metrics.fleschScore > 0
-      ? article.metrics.fleschScore
-      : null;
+  const measuredFlesch = liveScore.flesch > 0 ? liveScore.flesch : null;
+
+  // A run that never rendered the selected format has nothing to show. Say so,
+  // rather than presenting an empty editor that reads like an empty article.
+  if (generatedFormats.length === 0) {
+    return (
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 text-center space-y-2">
+        <Lock className="w-6 h-6 text-zinc-500 mx-auto" />
+        <p className="text-sm font-semibold text-zinc-200">Not checked / not generated</p>
+        <p className="text-xs text-zinc-400">
+          This run produced no HTML formats, so there is nothing to edit here. Check the formats
+          you want on the Generate screen and run again.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -397,10 +865,27 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
             <span className="text-zinc-400 font-mono">Flesch Score:</span>
             <span
               className={`font-semibold font-mono px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700 ${
-                measuredFlesch === null ? 'text-zinc-500' : 'text-emerald-400'
+                measuredFlesch === null
+                  ? 'text-zinc-500'
+                  : liveScore.checks.find((check) => check.id === 'flesch_range')?.passed
+                    ? 'text-emerald-400'
+                    : 'text-amber-400'
               }`}
             >
               {measuredFlesch === null ? '— not measured' : measuredFlesch}
+            </span>
+          </div>
+
+          {/* Live score, measured on the buffer as it is typed. */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-zinc-400 font-mono">Live Score:</span>
+            <span
+              className={`font-semibold font-mono px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700 ${
+                liveScore.passed ? 'text-emerald-400' : 'text-amber-400'
+              }`}
+              title={`${liveScore.checks.length - liveScore.failed.length} of ${liveScore.checks.length} checks passing`}
+            >
+              {liveScore.total}/100
             </span>
           </div>
 
@@ -432,13 +917,14 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
             onClick={handleDownloadZip}
             disabled={isZipping}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs transition-all shadow-sm active:scale-[0.98]"
-            title="Download complete bundle ZIP with all 4 formats (⌘⇧S)"
+            title="Download complete bundle ZIP with every generated format"
           >
             <FileArchive className="w-3.5 h-3.5 text-zinc-950" />
-            <span>{isZipping ? 'Archiving...' : 'Download All (4 Formats ZIP)'}</span>
-            <kbd className="hidden sm:inline text-[9px] font-mono px-1 py-0.2 rounded bg-zinc-300 text-zinc-900">
-              ⌘⇧S
-            </kbd>
+            <span>
+              {isZipping
+                ? 'Archiving...'
+                : `Download All (${generatedFormats.length} Format${generatedFormats.length === 1 ? '' : 's'} ZIP)`}
+            </span>
           </button>
         </div>
       </div>
@@ -487,16 +973,24 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                   <div className="p-1.5 space-y-1">
                     {FORMAT_OPTIONS.map((opt) => {
                       const isSelected = opt.id === selectedFormat;
-                      const hasText = Boolean(article.formats[opt.id]);
+                      const generated = isGenerated(opt.id);
                       return (
                         <button
                           key={opt.id}
                           type="button"
+                          disabled={!generated}
                           onClick={() => handleSetFormat(opt.id)}
+                          title={
+                            generated
+                              ? opt.desc
+                              : `${opt.name} was not checked for this run, so it was never generated.`
+                          }
                           className={`w-full text-left p-2.5 rounded-lg text-xs transition-colors flex items-start justify-between gap-3 ${
-                            isSelected
-                              ? 'bg-zinc-800 border border-zinc-700 text-zinc-100 font-semibold'
-                              : 'text-zinc-300 hover:bg-zinc-850 hover:text-zinc-100'
+                            !generated
+                              ? 'cursor-not-allowed opacity-45'
+                              : isSelected
+                                ? 'bg-zinc-800 border border-zinc-700 text-zinc-100 font-semibold'
+                                : 'text-zinc-300 hover:bg-zinc-850 hover:text-zinc-100'
                           }`}
                         >
                           <div className="space-y-1">
@@ -507,14 +1001,23 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                               </span>
                             </div>
                             <div className="text-[11px] text-zinc-400 font-normal leading-tight">
-                              {opt.desc}
+                              {generated ? opt.desc : 'Not checked / not generated'}
                             </div>
                           </div>
                           {isSelected && <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />}
+                          {!generated && (
+                            <Lock className="w-3.5 h-3.5 text-zinc-500 shrink-0 mt-0.5" />
+                          )}
                         </button>
                       );
                     })}
                   </div>
+                  {generatedFormats.length < FORMAT_OPTIONS.length && (
+                    <div className="px-3 py-2 border-t border-zinc-800 text-[11px] text-zinc-500 leading-tight">
+                      Locked formats were not checked for this run, so no HTML was produced for
+                      them. Check them on the Generate screen and run again to get them.
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -552,7 +1055,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
             <button
               onClick={handleCopyCode}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 text-xs font-medium transition-colors"
-              title="Copy active format HTML code (⌘⇧C)"
+              title="Copy active format HTML code"
             >
               {copiedKey === 'code' ? (
                 <>
@@ -563,7 +1066,6 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                 <>
                   <Copy className="w-3.5 h-3.5 text-zinc-400" />
                   <span>Copy Code</span>
-                  <kbd className="hidden md:inline text-[9px] font-mono text-zinc-400">⌘⇧C</kbd>
                 </>
               )}
             </button>
@@ -620,45 +1122,45 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
             {/* Quick Suggestion Chips */}
             <div className="flex flex-wrap gap-2 text-xs">
               <button
-                onClick={() =>
-                  handleRunImprovement(
-                    'Expand B2B commercial fitness statistical benchmarks, equipment lifespan comparisons, and ROI metrics with strong tags.'
-                  )
-                }
-                disabled={isImproving}
+              onClick={() =>
+                void handleRunImprovement(
+                  'Expand B2B commercial fitness statistical benchmarks, equipment lifespan comparisons, and ROI metrics with strong tags.'
+                )
+              }
+              disabled={isImproving}
                 className="px-2.5 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 text-[11px] font-mono hover:text-zinc-100 transition-colors"
               >
                 📈 Expand Statistical ROI &amp; Lifespans
               </button>
               <button
-                onClick={() =>
-                  handleRunImprovement(
-                    'Strengthen B2B call-to-action sections with direct consultation invitations, free 2D/3D gym floor planning references, and official quotation links.'
-                  )
-                }
-                disabled={isImproving}
+              onClick={() =>
+                void handleRunImprovement(
+                  'Strengthen B2B call-to-action sections with direct consultation invitations, free 2D/3D gym floor planning references, and official quotation links.'
+                )
+              }
+              disabled={isImproving}
                 className="px-2.5 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 text-[11px] font-mono hover:text-zinc-100 transition-colors"
               >
                 🎯 Add High-Converting B2B Lead CTA
               </button>
               <button
-                onClick={() =>
-                  handleRunImprovement(
-                    'Add 2 more interactive FAQ accordion items comparing commercial warranty terms and preventive maintenance schedules.'
-                  )
-                }
-                disabled={isImproving}
+              onClick={() =>
+                void handleRunImprovement(
+                  'Add 2 more interactive FAQ accordion items comparing commercial warranty terms and preventive maintenance schedules.'
+                )
+              }
+              disabled={isImproving}
                 className="px-2.5 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 text-[11px] font-mono hover:text-zinc-100 transition-colors"
               >
                 🏷️ Add Warranty &amp; Maintenance FAQs
               </button>
               <button
-                onClick={() =>
-                  handleRunImprovement(
-                    'Optimize sentence lengths to meet strict Yoast and Flesch reading ease score of 65+, breaking up run-on sentences and adding transition words.'
-                  )
-                }
-                disabled={isImproving}
+              onClick={() =>
+                void handleRunImprovement(
+                  'Optimize sentence lengths to meet strict Yoast and Flesch reading ease score of 65+, breaking up run-on sentences and adding transition words.'
+                )
+              }
+              disabled={isImproving}
                 className="px-2.5 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 text-[11px] font-mono hover:text-zinc-100 transition-colors"
               >
                 📖 Boost Flesch Score (65+ Optimal)
@@ -674,14 +1176,14 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
-                    handleRunImprovement();
+                    void handleRunImprovement();
                   }
                 }}
                 placeholder="Type specific enhancement (e.g., 'Add a section on hotel gym equipment space planning with 250 sq meter layout')..."
                 className="flex-1 bg-zinc-900 border border-zinc-750 rounded-lg px-3 py-2 text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 outline-none focus:border-zinc-500"
               />
               <button
-                onClick={() => handleRunImprovement()}
+                onClick={() => void handleRunImprovement()}
                 disabled={isImproving || !improveInstruction.trim()}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs sm:text-sm disabled:opacity-50 transition-colors"
               >
@@ -698,6 +1200,44 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                 )}
               </button>
             </div>
+
+            {/* What the agent was told, so a repair is never a guess. */}
+            <div className="text-[11px] text-zinc-400 font-mono bg-zinc-900/60 border border-zinc-800 rounded-lg p-2.5 space-y-1">
+              <div className="text-zinc-500 uppercase tracking-wider text-[10px]">
+                Context sent with this request
+              </div>
+              <div>
+                Failing checks:{' '}
+                <span className="text-zinc-200">
+                  {liveScore.failed.length > 0
+                    ? liveScore.failed.map((check) => check.id).join(', ')
+                    : 'none'}
+                </span>
+              </div>
+              <div>
+                Reviewer issues:{' '}
+                <span className="text-zinc-200">
+                  {article.reviewReport?.issues.length ?? 0}
+                </span>{' '}
+                · Brief, brand tokens and source markdown included
+              </div>
+            </div>
+
+            {improveLog.length > 0 && (
+              <div className="text-[11px] text-emerald-300 font-mono bg-emerald-950/40 border border-emerald-900 rounded-lg p-2.5 space-y-1">
+                <div className="text-emerald-400 uppercase tracking-wider text-[10px]">
+                  Applied changes
+                </div>
+                <ul className="space-y-0.5 list-disc pl-4">
+                  {improveLog.map((change, index) => (
+                    <li key={index}>{change}</li>
+                  ))}
+                </ul>
+                <div className="text-zinc-400 pt-1">
+                  Score {liveScore.total}/100 · undo with the Undo button
+                </div>
+              </div>
+            )}
 
             {improveError && (
               <div className="text-xs text-rose-400 font-mono bg-rose-950/60 p-2 rounded border border-rose-900">
@@ -912,12 +1452,21 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                 </span>
                 <span className="text-zinc-500">•</span>
                 <span className="text-zinc-400">{activeFormatMeta.name}</span>
-              </div>
-              <div className="flex items-center gap-2">
+              </div><div className="flex items-center gap-2">
                 <span className="px-1.5 py-0.5 rounded bg-zinc-950 border border-zinc-800 text-zinc-300">
                   {currentFormatStats.words} w
                 </span>
                 <span className="text-zinc-500 font-mono">{currentFormatStats.chars} chars</span>
+                <span
+                  className={`px-1.5 py-0.5 rounded font-mono border ${
+                    liveScore.passed
+                      ? 'bg-emerald-950/50 border-emerald-800 text-emerald-300'
+                      : 'bg-amber-950/50 border-amber-800 text-amber-300'
+                  }`}
+                  title={`${liveScore.checks.length - liveScore.failed.length} of ${liveScore.checks.length} checks passing`}
+                >
+                  {liveScore.total}/100
+                </span>
               </div>
             </div>
 
@@ -925,13 +1474,44 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
             <div className="flex-1 relative flex">
               <textarea
                 ref={codeEditorRef}
-                value={getCurrentFormatContent()}
-                onChange={(e) => updateCurrentFormatContent(e.target.value)}
+                value={draft}
+                onChange={(e) => handleDraftChange(e.target.value)}
                 onKeyDown={(e) => {
-                  // Support Tab indentation
+                  // Tab indents the current line, and indents every line of a
+                  // multi-line selection, instead of losing focus to the next
+                  // element on the page.
                   if (e.key === 'Tab') {
                     e.preventDefault();
-                    insertHtmlTag('  ');
+                    const textarea = e.currentTarget;
+                    const start = textarea.selectionStart;
+                    const end = textarea.selectionEnd;
+                    const value = draftRef.current;
+
+                    if (!e.shiftKey && start !== end) {
+                      const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+                      const block = value.slice(lineStart, end);
+                      const indented = block.replace(/^/gm, '  ');
+                      const next = value.slice(0, lineStart) + indented + value.slice(end);
+                      handleDraftChange(next);
+                      requestAnimationFrame(() => {
+                        textarea.setSelectionRange(lineStart, lineStart + indented.length);
+                      });
+                      return;
+                    }
+
+                    handleDraftChange(
+                      value.slice(0, start) + '  ' + value.slice(end)
+                    );
+                    requestAnimationFrame(() => {
+                      textarea.setSelectionRange(start + 2, start + 2);
+                    });
+                    return;
+                  }
+
+                  // Cmd/Ctrl+S saves the file rather than the browser dialog.
+                  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+                    e.preventDefault();
+                    handleDownloadFile();
                   }
                 }}
                 className="w-full h-[620px] lg:h-[700px] p-4 bg-zinc-950 text-zinc-100 font-mono text-xs sm:text-[13px] leading-relaxed resize-none outline-none focus:ring-0 selection:bg-zinc-800 border-0"
@@ -1012,7 +1592,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                     <span className="w-2.5 h-2.5 rounded-full bg-zinc-300" />
                   </div>
                   <div className="bg-white px-2.5 py-0.5 rounded text-[11px] font-mono text-zinc-500 border border-zinc-200 truncate max-w-xs">
-                    realleaderusa.id/blog/{article.seoMetadata.urlSlug}?format={selectedFormat}
+                    realleaderusa.id/blog/{metaDraft.urlSlug}?format={selectedFormat}
                   </div>
                   <div className="text-[10px] font-mono uppercase font-bold text-zinc-400">
                     {selectedFormat.endsWith('-id') ? 'ID' : 'EN'}
@@ -1093,20 +1673,6 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
             <ImageIcon className="w-4 h-4 text-zinc-300" />
             <span>8K AI Image Prompts</span>
           </button>
-
-          {/* Tab 5: Brand-Token HTML Preview */}
-          <button
-            type="button"
-            onClick={() => setBottomTab('preview')}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold transition-all shrink-0 ${
-              bottomTab === 'preview'
-                ? 'bg-zinc-800 text-zinc-100 shadow border border-zinc-700'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
-            }`}
-          >
-            <Eye className="w-4 h-4 text-emerald-400" />
-            <span>Brand Preview</span>
-          </button>
         </div>
 
         {/* Tab Content Panel */}
@@ -1114,13 +1680,15 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
           {/* TAB 1: FLESCH READABILITY CALCULATOR */}
           {bottomTab === 'flesch' && (
             <ReadabilityScorecard
-              content={getCurrentFormatContent()}
+              content={currentContent}
               language={selectedFormat.endsWith('-id') ? 'id' : 'en'}
               onLanguageChange={(newLang) => {
                 if (newLang === 'id' && !selectedFormat.endsWith('-id')) {
-                  handleSetFormat('inline-id');
+                  const target: OutputFormatId = 'inline-id';
+                  if (isGenerated(target)) handleSetFormat(target);
                 } else if (newLang === 'en' && selectedFormat.endsWith('-id')) {
-                  handleSetFormat('inline-en');
+                  const target: OutputFormatId = 'inline-en';
+                  if (isGenerated(target)) handleSetFormat(target);
                 }
               }}
             />
@@ -1129,15 +1697,10 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
           {/* TAB 2: SEO CHECKLIST */}
           {bottomTab === 'checklist' && (
             <SeoChecklistPanel
-              htmlContent={getCurrentFormatContent()}
-              metadata={article.seoMetadata}
-              focusKeyphraseInput={article.focusKeyphrase}
+              htmlContent={currentContent}
+              metadata={metaDraft}
+              focusKeyphraseInput={metaDraft.focusKeyphrase}
             />
-          )}
-
-          {/* TAB: BRAND-TOKEN HTML PREVIEW */}
-          {bottomTab === 'preview' && (
-            <HtmlPreviewPane html={getCurrentFormatContent()} profile={profile} />
           )}
 
           {/* TAB 3: SEO WORDPRESS METADATA */}
@@ -1154,7 +1717,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                 </div>
                 <button
                   onClick={async () => {
-                    const metaText = `SEO Title: ${article.seoMetadata.seoTitle}\nHeadline: ${article.seoMetadata.headline}\nFocus Keyphrase: ${article.focusKeyphrase || article.seoMetadata.focusKeyphrase}\nMeta Description: ${article.seoMetadata.metaDescription}\nURL Slug: ${article.seoMetadata.urlSlug}\nTags: ${article.seoMetadata.tags.join(', ')}`;
+                    const metaText = `SEO Title: ${metaDraft.seoTitle}\nHeadline: ${metaDraft.headline}\nFocus Keyphrase: ${metaDraft.focusKeyphrase}\nMeta Description: ${metaDraft.metaDescription}\nURL Slug: ${metaDraft.urlSlug}\nTags: ${metaDraft.tags.join(', ')}`;
                     await copyToClipboard(metaText);
                     showCopyFeedback('seoAll');
                   }}
@@ -1169,6 +1732,246 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                 </button>
               </div>
 
+              {/* Version history in two sections. Each entry expands into its
+                  own marked diff against what is in play; nothing is written
+                  until Restore is confirmed. */}
+              <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-3.5 space-y-3">
+                <span className="text-xs font-mono uppercase text-zinc-400 flex items-center gap-1.5">
+                  <History className="w-3.5 h-3.5" />
+                  Version History
+                </span>
+
+                {/* SEO metadata snapshots — version 1 is the pipeline's own
+                    output, stamped when the article was generated. */}
+                <div className="space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold text-zinc-300">
+                      SEO Metadata ({metadataVersions.length})
+                    </span>
+                    {copiedKey === 'metaVersion' && (
+                      <span className="text-[11px] text-emerald-400 font-mono">
+                        Version saved
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="text"
+                      value={versionLabel}
+                      onChange={(e) => setVersionLabel(e.target.value)}
+                      placeholder="Label this version (optional)"
+                      className="flex-1 min-w-[180px] bg-zinc-950 border border-zinc-800 rounded p-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
+                    />
+                    <button
+                      onClick={() => saveMetadataVersion()}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs transition-colors"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      Save current as new version
+                    </button>
+                  </div>
+
+                  <ul className="space-y-1.5">
+                    {[...metadataVersions].reverse().map((entry) => {
+                      const changes = metadataDiff(entry.metadata, metaDraft);
+                      const isCurrent = changes.length === 0;
+                      const isOpen =
+                        openDiff?.kind === 'meta' && openDiff.version === entry.version;
+                      return (
+                        <li
+                          key={entry.version}
+                          className={`rounded-lg border ${
+                            isCurrent
+                              ? 'bg-emerald-950/30 border-emerald-900'
+                              : 'bg-zinc-950 border-zinc-800'
+                          }`}
+                        >
+                          <button
+                            onClick={() => toggleDiff('meta', entry.version)}
+                            className="w-full flex flex-wrap items-center justify-between gap-2 px-2.5 py-2 text-left"
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-mono font-semibold text-zinc-100">
+                                  v{entry.version}
+                                </span>
+                                <span className="text-xs text-zinc-300 truncate">
+                                  {entry.label}
+                                </span>
+                                {isCurrent && (
+                                  <span className="text-[10px] font-mono uppercase text-emerald-400">
+                                    current
+                                  </span>
+                                )}
+                                {restoredFrom === entry.version && !isCurrent && (
+                                  <span className="text-[10px] font-mono uppercase text-amber-400">
+                                    restored
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] font-mono text-zinc-500 mt-0.5">
+                                {formatVersionStamp(entry.savedAt)}
+                                {changes.length > 0 && ` · ${changes.length} field(s) differ`}
+                              </div>
+                            </div>
+                            <ChevronDown
+                              className={`w-3.5 h-3.5 shrink-0 text-zinc-500 transition-transform ${
+                                isOpen ? 'rotate-180' : ''
+                              }`}
+                            />
+                          </button>
+                          {isOpen && (
+                            <div className="space-y-2 border-t border-zinc-800 px-2.5 pb-2.5 pt-2">
+                              {changes.length === 0 ? (
+                                <p className="text-[11px] font-mono text-zinc-500">
+                                  Identical to the metadata in play — nothing differs.
+                                </p>
+                              ) : (
+                                changes.map((change) => (
+                                  <div key={change.field} className="space-y-1">
+                                    <span className="block text-[10px] font-mono uppercase text-zinc-500">
+                                      {change.field}
+                                    </span>
+                                    <div className="rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 font-mono text-[11px] leading-relaxed break-words">
+                                      <WordDiffText from={change.from} to={change.to} />
+                                    </div>
+                                  </div>
+                                ))
+                              )}
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="text-[10px] font-mono text-zinc-600">
+                                  v{entry.version} → current
+                                </span>
+                                {!isCurrent && (
+                                  <button
+                                    onClick={() => restoreMetadata(entry.version)}
+                                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-100 hover:bg-white text-zinc-950 text-[11px] font-semibold transition-colors"
+                                  >
+                                    <RotateCcw className="w-3 h-3" />
+                                    Restore this version
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+
+                {/* Manual HTML snapshots of the format currently open. */}
+                <div className="space-y-2.5 border-t border-zinc-800 pt-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold text-zinc-300">
+                      Article Content — {formatName} ({contentVersions.length})
+                    </span>
+                    {copiedKey === 'contentVersion' && (
+                      <span className="text-[11px] text-emerald-400 font-mono">
+                        Version saved
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="text"
+                      value={contentVersionLabel}
+                      onChange={(e) => setContentVersionLabel(e.target.value)}
+                      placeholder="Label this snapshot (optional)"
+                      className="flex-1 min-w-[180px] bg-zinc-950 border border-zinc-800 rounded p-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
+                    />
+                    <button
+                      onClick={saveContentVersion}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs transition-colors"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      Save current as new version
+                    </button>
+                  </div>
+
+                  {contentVersions.length === 0 ? (
+                    <p className="text-[11px] text-zinc-500 leading-relaxed">
+                      No snapshots yet. Save one to pin the current HTML of this format, then
+                      compare or restore it later.
+                    </p>
+                  ) : (
+                    <ul className="space-y-1.5">
+                      {[...contentVersions].reverse().map((entry) => {
+                        const isCurrent = entry.html === draft;
+                        const isOpen =
+                          openDiff?.kind === 'content' && openDiff.version === entry.version;
+                        return (
+                          <li
+                            key={entry.version}
+                            className={`rounded-lg border ${
+                              isCurrent
+                                ? 'bg-emerald-950/30 border-emerald-900'
+                                : 'bg-zinc-950 border-zinc-800'
+                            }`}
+                          >
+                            <button
+                              onClick={() => toggleDiff('content', entry.version)}
+                              className="w-full flex flex-wrap items-center justify-between gap-2 px-2.5 py-2 text-left"
+                            >
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-mono font-semibold text-zinc-100">
+                                    v{entry.version}
+                                  </span>
+                                  <span className="text-xs text-zinc-300 truncate">
+                                    {entry.label}
+                                  </span>
+                                  {isCurrent && (
+                                    <span className="text-[10px] font-mono uppercase text-emerald-400">
+                                      current
+                                    </span>
+                                  )}
+                                  {contentRestoredFrom === entry.version && !isCurrent && (
+                                    <span className="text-[10px] font-mono uppercase text-amber-400">
+                                      restored
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] font-mono text-zinc-500 mt-0.5">
+                                  {formatVersionStamp(entry.savedAt)}
+                                  {!isCurrent && ' · differs from buffer'}
+                                </div>
+                              </div>
+                              <ChevronDown
+                                className={`w-3.5 h-3.5 shrink-0 text-zinc-500 transition-transform ${
+                                  isOpen ? 'rotate-180' : ''
+                                }`}
+                              />
+                            </button>
+                            {isOpen && (
+                              <div className="space-y-2 border-t border-zinc-800 px-2.5 pb-2.5 pt-2">
+                                <LineDiffView from={entry.html} to={draft} />
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <span className="text-[10px] font-mono text-zinc-600">
+                                    v{entry.version} → current buffer
+                                  </span>
+                                  {!isCurrent && (
+                                    <button
+                                      onClick={() => restoreContent(entry.version)}
+                                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-100 hover:bg-white text-zinc-950 text-[11px] font-semibold transition-colors"
+                                    >
+                                      <RotateCcw className="w-3 h-3" />
+                                      Restore this version
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Post Title */}
                 <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-3.5 space-y-2">
@@ -1179,16 +1982,16 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                     <div className="flex items-center gap-2">
                       <span
                         className={`text-[10px] font-mono ${
-                          article.seoMetadata.seoTitle.length > 55
+                          metaDraft.seoTitle.length > 55
                             ? 'text-amber-400'
                             : 'text-zinc-400'
                         }`}
                       >
-                        {article.seoMetadata.seoTitle.length}/55
+                        {metaDraft.seoTitle.length}/55
                       </span>
                       <button
                         onClick={() => {
-                          copyToClipboard(article.seoMetadata.seoTitle);
+                          copyToClipboard(metaDraft.seoTitle);
                           showCopyFeedback('seoTitle');
                         }}
                         className="p-1 hover:bg-zinc-800 rounded text-zinc-400 hover:text-zinc-200"
@@ -1203,13 +2006,8 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                   </div>
                   <input
                     type="text"
-                    value={article.seoMetadata.seoTitle}
-                    onChange={(e) =>
-                      onUpdateArticle({
-                        ...article,
-                        seoMetadata: { ...article.seoMetadata, seoTitle: e.target.value },
-                      })
-                    }
+                    value={metaDraft.seoTitle}
+                    onChange={(e) => handleMetaChange({ seoTitle: e.target.value })}
                     className="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-sm text-zinc-100 font-medium"
                   />
                 </div>
@@ -1222,7 +2020,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                     </span>
                     <button
                       onClick={() => {
-                        copyToClipboard(article.seoMetadata.headline);
+                        copyToClipboard(metaDraft.headline);
                         showCopyFeedback('headline');
                       }}
                       className="p-1 hover:bg-zinc-800 rounded text-zinc-400 hover:text-zinc-200"
@@ -1236,13 +2034,8 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                   </div>
                   <input
                     type="text"
-                    value={article.seoMetadata.headline}
-                    onChange={(e) =>
-                      onUpdateArticle({
-                        ...article,
-                        seoMetadata: { ...article.seoMetadata, headline: e.target.value },
-                      })
-                    }
+                    value={metaDraft.headline}
+                    onChange={(e) => handleMetaChange({ headline: e.target.value })}
                     className="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-sm text-zinc-100 font-medium"
                   />
                 </div>
@@ -1256,18 +2049,16 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                     <div className="flex items-center gap-2">
                       <span
                         className={`text-[10px] font-mono ${
-                          (article.focusKeyphrase || article.seoMetadata.focusKeyphrase).length > 20
+                          metaDraft.focusKeyphrase.length > 20
                             ? 'text-amber-400'
                             : 'text-zinc-400'
                         }`}
                       >
-                        {(article.focusKeyphrase || article.seoMetadata.focusKeyphrase).length}/20
+                        {metaDraft.focusKeyphrase.length}/20
                       </span>
                       <button
                         onClick={() => {
-                          copyToClipboard(
-                            article.focusKeyphrase || article.seoMetadata.focusKeyphrase
-                          );
+                          copyToClipboard(metaDraft.focusKeyphrase);
                           showCopyFeedback('focusKeyphrase');
                         }}
                         className="p-1 hover:bg-zinc-800 rounded text-zinc-400 hover:text-zinc-200"
@@ -1282,14 +2073,8 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                   </div>
                   <input
                     type="text"
-                    value={article.focusKeyphrase || article.seoMetadata.focusKeyphrase}
-                    onChange={(e) =>
-                      onUpdateArticle({
-                        ...article,
-                        focusKeyphrase: e.target.value,
-                        seoMetadata: { ...article.seoMetadata, focusKeyphrase: e.target.value },
-                      })
-                    }
+                    value={metaDraft.focusKeyphrase}
+                    onChange={(e) => handleMetaChange({ focusKeyphrase: e.target.value })}
                     className="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-sm text-zinc-100 font-medium font-mono"
                   />
                 </div>
@@ -1302,7 +2087,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                     </span>
                     <button
                       onClick={() => {
-                        copyToClipboard(article.seoMetadata.urlSlug);
+                        copyToClipboard(metaDraft.urlSlug);
                         showCopyFeedback('urlSlug');
                       }}
                       className="p-1 hover:bg-zinc-800 rounded text-zinc-400 hover:text-zinc-200"
@@ -1316,13 +2101,8 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                   </div>
                   <input
                     type="text"
-                    value={article.seoMetadata.urlSlug}
-                    onChange={(e) =>
-                      onUpdateArticle({
-                        ...article,
-                        seoMetadata: { ...article.seoMetadata, urlSlug: e.target.value },
-                      })
-                    }
+                    value={metaDraft.urlSlug}
+                    onChange={(e) => handleMetaChange({ urlSlug: e.target.value })}
                     className="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-sm text-zinc-100 font-mono"
                   />
                 </div>
@@ -1336,16 +2116,16 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                     <div className="flex items-center gap-2">
                       <span
                         className={`text-[10px] font-mono ${
-                          article.seoMetadata.metaDescription.length > 155
+                          metaDraft.metaDescription.length > 155
                             ? 'text-amber-400'
                             : 'text-zinc-400'
                         }`}
                       >
-                        {article.seoMetadata.metaDescription.length}/155
+                        {metaDraft.metaDescription.length}/155
                       </span>
                       <button
                         onClick={() => {
-                          copyToClipboard(article.seoMetadata.metaDescription);
+                          copyToClipboard(metaDraft.metaDescription);
                           showCopyFeedback('metaDesc');
                         }}
                         className="p-1 hover:bg-zinc-800 rounded text-zinc-400 hover:text-zinc-200"
@@ -1359,13 +2139,8 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                     </div>
                   </div>
                   <textarea
-                    value={article.seoMetadata.metaDescription}
-                    onChange={(e) =>
-                      onUpdateArticle({
-                        ...article,
-                        seoMetadata: { ...article.seoMetadata, metaDescription: e.target.value },
-                      })
-                    }
+                    value={metaDraft.metaDescription}
+                    onChange={(e) => handleMetaChange({ metaDescription: e.target.value })}
                     rows={2}
                     className="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-sm text-zinc-100 leading-relaxed outline-none"
                   />
@@ -1377,7 +2152,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                     <span className="text-xs font-mono uppercase text-zinc-400">WordPress Tags</span>
                     <button
                       onClick={() => {
-                        copyToClipboard(article.seoMetadata.tags.join(', '));
+                        copyToClipboard(metaDraft.tags.join(', '));
                         showCopyFeedback('tags');
                       }}
                       className="p-1 hover:bg-zinc-800 rounded text-zinc-400 hover:text-zinc-200"
@@ -1390,7 +2165,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                     </button>
                   </div>
                   <div className="flex flex-wrap gap-2 pt-1">
-                    {article.seoMetadata.tags.map((tag, i) => (
+                    {metaDraft.tags.map((tag, i) => (
                       <span
                         key={i}
                         className="text-xs px-2.5 py-1 rounded bg-zinc-950 border border-zinc-800 text-zinc-300 font-mono"

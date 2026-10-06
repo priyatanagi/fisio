@@ -5,10 +5,11 @@ export type { GeneratedArticle, LengthTarget, OutputFormatId, SeoMetadata } from
 export type AgentRole = 'judge' | 'impower' | 'creator' | 'reviewer' | 'designer';
 
 /**
- * Internal role for Impower's `max` keyword-research pass. Not user-configurable;
- * it reuses the Impower provider, so the provider UI stays at five roles.
+ * Internal roles. Not user-configurable: `research` reuses the Impower provider
+ * and `improver` reuses the Designer provider, so the provider UI stays at five
+ * roles.
  */
-export type InternalRole = 'research';
+export type InternalRole = 'research' | 'improver';
 export type AnyRole = AgentRole | InternalRole;
 
 export type ImpowerLevel = 'off' | 'lite' | 'standard' | 'max';
@@ -98,6 +99,11 @@ export interface BrandWarning {
 export interface DesignerOutput {
   html: string;
   warnings: BrandWarning[];
+}
+
+export interface ImproverOutput {
+  html: string;
+  changes: string[];
 }
 
 // runArticle keeps its working set in local variables and returns a

@@ -115,12 +115,12 @@ describe('compileTokenCss', () => {
     expect(blockquote['border-left']).toBeUndefined();
   });
 
-  it('uses the typography scale tokens for leading and measure', () => {
-    const body = compileElementRules({ ...base, lineHeight: '1.9', measureWidth: '70ch' }).find(
+  it('uses the typography tokens for leading and paragraph alignment', () => {
+    const body = compileElementRules({ ...base, lineHeight: '1.9', textAlignment: 'justify' }).find(
       (r) => r.selector.includes('p')
     )!;
     expect(body.declarations['line-height']).toBe('1.9');
-    expect(body.declarations['max-width']).toBe('70ch');
+    expect(body.declarations['text-align']).toBe('justify');
   });
 });
 

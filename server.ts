@@ -19,6 +19,7 @@ import {
   buildCreatorPrompt,
   buildReviewerPrompt,
   buildDesignerPrompt,
+  buildImproverPrompt,
 } from './src/server/agentPrompts.js';
 
 dotenv.config();
@@ -183,6 +184,8 @@ function promptForRole(role: string, input: any, profile: any): string {
       return buildReviewerPrompt(input, profile);
     case 'designer':
       return buildDesignerPrompt(input, profile);
+    case 'improver':
+      return buildImproverPrompt(input, profile);
     default:
       throw new Error(`Unsupported role: ${role}`);
   }

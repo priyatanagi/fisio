@@ -372,6 +372,105 @@ describe('Designer fan-out', () => {
     expect(calls.designer).toBe(3);
   });
 
+  it('hands the first language render to the second as its structure', async () => {
+    const seen: Record<string, any> = {};
+    await run(
+      { targetFormats: ['inline-en', 'inline-id'], languages: ['en', 'id'] },
+      {
+        creator: () => ({ markdownContent: markdown }),
+        designer: (input: any) => {
+          seen[input.language] = input.referenceHtml;
+          return { html: `${input.referenceHtml ? 'WITH-REFERENCE' : 'FIRST'}`, warnings: [] };
+        },
+      }
+    );
+    expect(seen.en).toBeUndefined();
+    expect(seen.id).toContain('FIRST');
+  });
+
+  it('does not hand a cross-mode reference to the other CSS mode', async () => {
+    const seen: Record<string, any> = {};
+    await run(
+      { targetFormats: ['inline-en', 'clean-en'], languages: ['en'] },
+      {
+        creator: () => ({ markdownContent: markdown }),
+        designer: (input: any) => {
+          seen[input.cssMode] = input.referenceHtml;
+          return { html, warnings: [] };
+        },
+      }
+    );
+    expect(seen.clean).toBeUndefined();
+  });
+
+  it('strips the page background the model painted onto the article root', async () => {
+    const result = await run({}, {
+      creator: () => ({ markdownContent: markdown }),
+      designer: () => ({
+        html: '<article style="color: #333940; background-color: #f8fafc; padding: 20px;"><p>Body</p></article>',
+        warnings: [],
+      }),
+    });
+    expect(result.article!.formats['inline-en']).not.toContain('#f8fafc');
+    expect(result.article!.formats['inline-en']).toContain('padding: 20px');
+  });
+
+  it('releases the article width but keeps the paragraph measure', async () => {
+    const result = await run({}, {
+      creator: () => ({ markdownContent: markdown }),
+      designer: () => ({
+        html: '<article style="max-width: 1000px; margin: 0 auto;"><p style="max-width: 68ch;">Body</p></article>',
+        warnings: [],
+      }),
+    });
+    const rendered = result.article!.formats['inline-en'];
+    expect(rendered).not.toContain('max-width: 1000px');
+    expect(rendered).toContain('max-width: 68ch');
+  });
+
+  it('gives the language that dropped the header the sibling one', async () => {
+    const result = await run(
+      { targetFormats: ['inline-en', 'inline-id'], languages: ['en', 'id'] },
+      {
+        creator: () => ({ markdownContent: markdown }),
+        designer: (input: any) =>
+          input.language === 'en'
+            ? {
+                html: '<article><header style="text-align: center; border-bottom: 1px solid #ccc;"><h1>Title</h1></header><p>Body</p></article>',
+                warnings: [],
+              }
+            : { html: '<article><h1>Judul</h1><p>Isi</p></article>', warnings: [] },
+      }
+    );
+    const indonesian = result.article!.formats['inline-id'];
+    expect(indonesian).toContain('border-bottom: 1px solid #ccc');
+    expect(indonesian).toContain('<h1>Judul</h1>');
+  });
+
+  it('does not report the Indonesian render as the English mirror', async () => {
+    const result = await run(
+      { targetFormats: ['clean-id'], languages: ['id'] },
+      {
+        creator: () => ({ markdownContent: markdown }),
+        designer: () => ({ html: '<article><p>Isi Indonesia</p></article>', warnings: [] }),
+      }
+    );
+    expect(result.article!.cleanHtml).toBe('');
+    expect(result.article!.formats['clean-id']).toContain('Isi Indonesia');
+  });
+
+  it('seeds metadata version 1 from the pipeline output', async () => {
+    const result = await run({}, {
+      creator: () => ({ markdownContent: markdown }),
+      designer: () => ({ html, warnings: [] }),
+    });
+    const versions = result.article!.metadataVersions!;
+    expect(versions).toHaveLength(1);
+    expect(versions[0].version).toBe(1);
+    expect(versions[0].label).toBe('Original output');
+    expect(versions[0].metadata).toEqual(result.article!.seoMetadata);
+  });
+
   it('filters formats by the configured languages', async () => {
     const result = await run(
       { targetFormats: ['inline-en', 'inline-id'], languages: ['en'] },
@@ -517,19 +616,22 @@ describe('resumeArticle — retry creator', () => {
 });
 
 describe('measured metrics', () => {
+  // The run is configured for English, so the render is scored with English
+  // syllable rules. The fixture has to stay short and low-syllable: the
+  // measurer counts vowel groups, which floors Indonesian prose at 0 — the
+  // zero this test exists to prove is a measurement, not a placeholder.
   it('records a measured Flesch score instead of a zero placeholder', async () => {
     const result = await run({ judge: false, impower: 'off', reviewer: 'off', targetWords: 900 }, {
       creator: () => ({
         markdownContent:
-          '# Judul Artikel\n\nProgram makan bergizi gratis menyediakan makan siang gratis bagi anak sekolah. ' +
-          'Program ini berjalan setiap hari kerja di sekolah. Dapur berada di dalam sekolah masing-masing.\n\n' +
-          '## Sasaran\n\nSasaran utama adalah anak sekolah dasar kelas satu sampai enam. Pendaftaran dilakukan ' +
-          'pada awal tahun ajaran. Biaya program ditanggung oleh pemerintah pusat.\n\n' +
-          '## Distribusi\n\nDistribusi dilakukan melalui dapur yang dikelola sekolah. Pengambilan berlangsung ' +
-          'saat jam istirahat. Jadwal distribusi berjalan setiap hari kerja tanpa kecuali.\n',
+          '# Choosing a Treadmill\n\nA treadmill is a machine for walking and running at home. ' +
+          'It has a wide belt and a clear display. Most models fold up when you are done.\n\n' +
+          '## Safety\n\nUse the safety clip before you start. Keep children and pets away from ' +
+          'the belt. A slow pace is best for your first week.\n\n## Upkeep\n\nWipe the deck after ' +
+          'each session. Check the belt for loose edges each month. A quiet motor needs little repair.\n',
       }),
       designer: () => ({
-        html: '<article><h2>Sasaran</h2><p>Sasaran utama adalah anak sekolah dasar kelas satu sampai enam. Pendaftaran dilakukan pada awal tahun ajaran.</p></article>',
+        html: '<article><h2>Safety</h2><p>Use the safety clip before you start. Keep children and pets away from the belt. A slow pace is best for your first week.</p></article>',
         warnings: [],
       }),
     });

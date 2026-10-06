@@ -1,7 +1,7 @@
 import type { UserProfile, DesignRules } from '../types/profile';
 import { resolveProfile } from '../types/profile';
 import { DEFAULT_UNIVERSAL_RULES, type UniversalRules } from '../config/universalRules';
-import { withTokenDefaults, readToken, type Token } from '../config/designTokens';
+import { ALL_TOKENS, withTokenDefaults, readToken, type Token } from '../config/designTokens';
 import { validateContrast } from '../config/tokenContrast';
 import type { SeoBrief } from '../pipeline/stages';
 
@@ -64,11 +64,11 @@ export function buildDesignTokenBlock(rules: DesignRules): string {
     line('Primary', r.primaryColor),
     line('Secondary (headings)', r.secondaryColor),
     line('Accent', r.accentColor),
-    line('Background', r.backgroundColor),
+    line('Background (component surfaces only — never the article or page)', r.backgroundColor),
     line('Body text', r.textColor),
     line('Heading font', r.headingFont),
     line('Body font', r.bodyFont),
-    line('Body copy', `${t('bodyStyle')}; line-height ${t('lineHeight')}; width ${t('measureWidth')}`),
+    line('Body copy', `${t('bodyStyle')}; line-height ${t('lineHeight')}; alignment ${t('textAlignment')}`),
     line('Headings', `${t('headingStyle')}; weight ${t('headingWeight')}; h1 ${t('h1Size')}; tracking ${t('letterSpacing')}`),
     line('Link', t('hyperlinkStyle')),
     line('Bullets', t('bulletStyle')),
@@ -79,6 +79,9 @@ export function buildDesignTokenBlock(rules: DesignRules): string {
     line('FAQ', t('faqStyle')),
     line('Blockquote', t('blockquoteStyle')),
     line('Button', t('buttonStyle')),
+    ...ALL_TOKENS.filter((token) => t(token.key).startsWith('custom-css:')).map((token) =>
+      line(`${token.label} custom CSS`, t(token.key).slice('custom-css:'.length))
+    ),
   ];
   return [
     'BRAND DESIGN TOKENS — use exactly these values, never substitute a colour or font:',
@@ -91,6 +94,7 @@ export function buildDesignTokenBlock(rules: DesignRules): string {
     '',
     'Apply every element style above as a concrete CSS decision, written as inline `style`',
     'declarations on the element itself. Do not rely on classes or an external stylesheet.',
+    'Any Custom CSS entries are user-authored declarations; apply them to the named component.',
   ].join('\n');
 }
 
@@ -251,8 +255,90 @@ Respond with ONLY this JSON shape:
 }`;
 }
 
+export interface ImproverInput {
+  html: string;
+  language: 'en' | 'id';
+  cssMode: 'inline' | 'clean';
+  instruction: string;
+  topic: string;
+  focusKeyphrase?: string;
+  targetWords?: number;
+  /** The checks the app measured and found failing, so the fix is not a guess. */
+  failedChecks: { id: string; title: string; actual: string; expected: string }[];
+  reviewIssues?: { severity: string; category: string; message: string; suggestedFix: string }[];
+  seoMetadata?: Record<string, unknown>;
+  markdown?: string;
+}
+
+/**
+ * A targeted repair of one rendered format.
+ *
+ * The agent is given everything the app already knows — the failing measured
+ * checks, the reviewer's issues, the brief and the brand tokens — so it fixes a
+ * named problem rather than rewriting the article on a hunch.
+ */
+export function buildImproverPrompt(input: ImproverInput, profile: UserProfile): string {
+  const langName = input.language === 'id' ? 'Bahasa Indonesia' : 'English (US)';
+  const mode =
+    input.cssMode === 'inline'
+      ? 'inline CSS only: every tag carries a style attribute, no <style> block'
+      : 'clean semantic HTML: no style attributes, one <style> block of classes';
+
+  const failed = input.failedChecks.length
+    ? input.failedChecks
+        .map((check) => `- [${check.id}] ${check.title}: measured "${check.actual}", required ${check.expected}.`)
+        .join('\n')
+    : '- none; the measured checks all pass, so follow the instruction alone.';
+
+  const review = input.reviewIssues?.length
+    ? input.reviewIssues
+        .map((issue) => `- (${issue.severity}/${issue.category}) ${issue.message} -> ${issue.suggestedFix}`)
+        .join('\n')
+    : '- none recorded.';
+
+  return `You are the Improver: a front-end developer repairing one rendered article.
+
+${buildBrandBlock(profile)}
+${buildDesignTokenBlock(profile.designRules)}
+
+ARTICLE TOPIC: "${input.topic}"
+FOCUS KEYPHRASE: "${input.focusKeyphrase ?? '(none)'}"
+${input.targetWords ? `TARGET LENGTH: ~${input.targetWords} words` : ''}
+TARGET LANGUAGE: ${langName}. Keep every visible string in this language.
+OUTPUT FORMAT: ${mode}.
+
+MEASURED CHECKS THAT FAILED (measured by the app, not estimated):
+${failed}
+
+REVIEWER ISSUES ON RECORD:
+${review}
+
+${input.markdown ? `ORIGINAL MARKDOWN (the source of truth for the content):\n${input.markdown}\n` : ''}
+THE HTML TO REPAIR:
+${input.html}
+
+THE USER'S INSTRUCTION:
+${input.instruction || '(none given — fix the measured failures above)'}
+
+RULES:
+- Change only what the instruction or a listed failure requires. Leave every other element byte-identical.
+- Keep the element order, the wrapper structure and the styling of the parts you are not fixing.
+- Never remove a section, an image, a link or an FAQ to make a check pass.
+- The article must stay in ${langName}; do not switch languages.
+- Never paint a page background and never cap the article width; the host page owns both.
+- Return the whole repaired HTML document, not a diff and not a fragment.
+
+Respond with ONLY this JSON shape:
+{ "html": "<article style=\\"...\\">...</article>", "changes": ["what you changed and why"] }`;
+}
+
 export function buildDesignerPrompt(
-  input: { markdown: string; language: 'en' | 'id'; cssMode: 'inline' | 'clean' },
+  input: {
+    markdown: string;
+    language: 'en' | 'id';
+    cssMode: 'inline' | 'clean';
+    referenceHtml?: string;
+  },
   profile: UserProfile
 ): string {
   const langName = input.language === 'id' ? 'Bahasa Indonesia' : 'English (US)';
@@ -266,6 +352,20 @@ export function buildDesignerPrompt(
       ? '{ "html": "<article style=\\"...\\">...</article>" }'
       : `{ "html": "<style>:root{--primary:${profile.designRules.primaryColor};}</style><article>...</article>" }`;
 
+  // The same article rendered in another language. Copying its structure is what
+  // stops the two languages shipping different markup and different styling.
+  const reference = input.referenceHtml
+    ? [
+        '',
+        `STRUCTURE REFERENCE — the same article, already rendered in ${input.language === 'id' ? 'English' : 'Bahasa Indonesia'}:`,
+        'Reuse its exact structure: the same wrapper elements in the same order, the same header block,',
+        'and the same inline styles and style rules. Translate only the visible text into ' +
+          `${langName}. Do not add, remove or reorder elements.`,
+        '',
+        input.referenceHtml,
+      ].join('\n')
+    : '';
+
   return `You are the Designer: a front-end developer converting Markdown into publish-ready HTML.
 
 ${buildBrandBlock(profile)}
@@ -278,6 +378,10 @@ RULES:
 ${modeRules}
 - Preserve all content, headings, lists and structure exactly as written.
 - Never introduce a colour that is not in the brand design tokens above.
+- The article fills the width of the container it is placed in. Never set max-width, width or margin on the <article>, <body> or <main> element. Apply the reading measure to the paragraphs instead.
+- Never paint a page background. Set no background, background-color or background-image on the <article>, <body> or <main> element: the host page provides the surface, and it must show through. The background colour token is only for components inside the article, such as callouts, table headers and FAQ cards.
+- Start the article body with a <header> element containing the H1, then the sections.
+${reference}
 
 MARKDOWN:
 ${input.markdown}

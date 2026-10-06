@@ -47,6 +47,29 @@ export interface FormatsBundle {
   'clean-id'?: string;
 }
 
+export interface MetadataVersion {
+  /** 1-based. Version 1 is always the metadata exactly as the pipeline produced it. */
+  version: number;
+  label: string;
+  /** ISO timestamp of when this version was recorded. */
+  savedAt: string;
+  metadata: SeoMetadata;
+}
+
+export interface ContentVersion {
+  /**
+   * 1-based and shared across formats — the next save is always max + 1, so a
+   * version number names exactly one snapshot in the whole history.
+   */
+  version: number;
+  label: string;
+  /** ISO timestamp of when this version was recorded. */
+  savedAt: string;
+  /** The editor format this snapshot was taken from; the snapshot is that format's HTML. */
+  format: OutputFormatId;
+  html: string;
+}
+
 export interface GeneratedArticle {
   id: string;
   topic: string;
@@ -60,6 +83,18 @@ export interface GeneratedArticle {
   seoMetadata: SeoMetadata;
   seoMetadataEn?: SeoMetadata;
   seoMetadataId?: SeoMetadata;
+  /**
+   * Labelled history of the SEO metadata, oldest first. Optional because
+   * articles saved before versioning existed still load without it; an article
+   * with no history is seeded from its own `seoMetadata`.
+   */
+  metadataVersions?: MetadataVersion[];
+  /**
+   * Manually saved snapshots of the article HTML, oldest first. Optional like
+   * `metadataVersions`: articles saved before content versioning existed simply
+   * carry no history until the reader saves their first snapshot.
+   */
+  contentVersions?: ContentVersion[];
   inlineCssHtml: string;
   cleanHtml: string;
   imagePrompts: ImagePromptItem[];

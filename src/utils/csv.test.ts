@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { parseCsv, validateRow } from './csv';
+import {
+  batchTemplateCsv,
+  parseCsv,
+  validateRow,
+  CSV_COLUMNS,
+  IMPOWER_LEVELS,
+  REVIEWER_MODES,
+} from './csv';
 
 const HEADER =
   'Topic_Idea,Focus_Keyphrase,Target_Length,Tone_Override,Impower_Level,Reviewer_Mode';
@@ -127,5 +134,32 @@ describe('validateRow', () => {
   it('flags a missing topic as fatal', () => {
     const result = validateRow({ ...base, Topic_Idea: '  ' }, globals);
     expect(result.issues.some((i) => i.fatal && i.field === 'Topic_Idea')).toBe(true);
+  });
+});
+
+describe('batchTemplateCsv', () => {
+  it('opens with the canonical header row', () => {
+    const [header] = batchTemplateCsv().split(/\r?\n/);
+    expect(header).toBe(CSV_COLUMNS.join(','));
+  });
+
+  it('parses back into example rows that validate cleanly', () => {
+    const rows = parseCsv(batchTemplateCsv());
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      const { issues } = validateRow(row, { impower: 'standard', reviewer: 'strict' });
+      expect(issues.filter((issue) => issue.fatal)).toEqual([]);
+    }
+  });
+
+  it('demonstrates every optional column with a value the validator accepts', () => {
+    const rows = parseCsv(batchTemplateCsv());
+    expect(rows.some((row) => row.Target_Length === 'long')).toBe(true);
+    const impowers = rows.map((row) => row.Impower_Level).filter(Boolean);
+    const reviewers = rows.map((row) => row.Reviewer_Mode).filter(Boolean);
+    expect(impowers.length).toBeGreaterThan(0);
+    expect(reviewers.length).toBeGreaterThan(0);
+    for (const value of impowers) expect(IMPOWER_LEVELS).toContain(value as any);
+    for (const value of reviewers) expect(REVIEWER_MODES).toContain(value as any);
   });
 });

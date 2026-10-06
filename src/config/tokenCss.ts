@@ -1,5 +1,5 @@
 import type { DesignRules } from '../types/profile';
-import { withTokenDefaults } from './designTokens';
+import { customDeclarations, withTokenDefaults } from './designTokens';
 
 /**
  * Compiles design tokens into a real stylesheet, and reports whether generated
@@ -38,6 +38,15 @@ function pick(rules: DesignRules, key: string): string {
   return typeof value === 'string' && value.trim() ? value : '';
 }
 
+function customCss(rules: DesignRules, key: string): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(customDeclarations(rules, key)).map(([property, value]) => [
+      property.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`),
+      value,
+    ] as [string, string])
+  );
+}
+
 /**
  * Build the per-element declarations. This is the one place a token choice is
  * turned into concrete CSS; the preview, the stylesheet and the compliance
@@ -54,7 +63,6 @@ export function compileElementRules(rules: DesignRules): ElementRule[] {
   const bodyFont = pick(r, 'bodyFont');
 
   const lineHeight = pick(r, 'lineHeight');
-  const measure = pick(r, 'measureWidth');
   const h1Size = pick(r, 'h1Size');
   const headingWeight = pick(r, 'headingWeight');
   const letterSpacing = pick(r, 'letterSpacing');
@@ -71,9 +79,11 @@ export function compileElementRules(rules: DesignRules): ElementRule[] {
       'font-family': bodyFont,
       color: text,
       'line-height': lineHeight,
-      'max-width': measure,
-      ...(bodyStyle === 'compact' ? { 'font-size': '15px' } : {}),
-      ...(bodyStyle === 'editorial' ? { 'font-family': bodyFont } : {}),
+      'text-align': pick(r, 'textAlignment'),
+      ...(bodyStyle === 'compact' ? { 'font-size': '13px' } : {}),
+      ...(bodyStyle === 'editorial' || bodyStyle === 'airy' ? { 'font-size': '16px' } : {}),
+      ...customCss(r, 'textAlignment'),
+      ...customCss(r, 'bodyStyle'),
     },
   });
 
@@ -93,7 +103,13 @@ export function compileElementRules(rules: DesignRules): ElementRule[] {
   out.push({
     selector: 'h1, h2, h3, h4, h5, h6',
     label: 'Headings',
-    declarations: { ...headingBase, ...(headingOverrides[headingStyle] ?? {}) },
+    declarations: {
+      ...headingBase,
+      ...(headingOverrides[headingStyle] ?? {}),
+      'font-weight': headingWeight,
+      'letter-spacing': letterSpacing,
+      ...customCss(r, 'headingStyle'),
+    },
   });
   out.push({
     selector: 'h1',
@@ -109,7 +125,7 @@ export function compileElementRules(rules: DesignRules): ElementRule[] {
   out.push({
     selector: 'a',
     label: 'Links',
-    declarations: { color: primary, ...(linkOverrides[pick(r, 'hyperlinkStyle')] ?? {}) },
+    declarations: { color: primary, ...(linkOverrides[pick(r, 'hyperlinkStyle')] ?? {}), ...customCss(r, 'hyperlinkStyle') },
   });
 
   const bulletOverrides: Record<string, string> = {
@@ -126,6 +142,7 @@ export function compileElementRules(rules: DesignRules): ElementRule[] {
       'padding-left': '1.4em',
       color: text,
       'font-family': bodyFont,
+      ...customCss(r, 'bulletStyle'),
     },
   });
 
@@ -143,6 +160,7 @@ export function compileElementRules(rules: DesignRules): ElementRule[] {
       'padding-left': '1.4em',
       color: text,
       'font-family': bodyFont,
+      ...customCss(r, 'numberingStyle'),
     },
   });
 
@@ -155,7 +173,7 @@ export function compileElementRules(rules: DesignRules): ElementRule[] {
   out.push({
     selector: 'blockquote',
     label: 'Blockquote',
-    declarations: { margin: '1.2em 0', color: text, ...(quoteOverrides[pick(r, 'blockquoteStyle')] ?? {}) },
+    declarations: { margin: '1.2em 0', color: text, ...(quoteOverrides[pick(r, 'blockquoteStyle')] ?? {}), ...customCss(r, 'blockquoteStyle') },
   });
 
   const imageOverrides: Record<string, Record<string, string>> = {
@@ -167,7 +185,7 @@ export function compileElementRules(rules: DesignRules): ElementRule[] {
   out.push({
     selector: 'img, figure img',
     label: 'Image frame',
-    declarations: { 'max-width': '100%', height: 'auto', display: 'block', ...(imageOverrides[pick(r, 'imageStyle')] ?? {}) },
+    declarations: { 'max-width': '100%', height: 'auto', display: 'block', ...(imageOverrides[pick(r, 'imageStyle')] ?? {}), ...customCss(r, 'imageStyle') },
   });
 
   const codeOverrides: Record<string, Record<string, string>> = {
@@ -182,6 +200,7 @@ export function compileElementRules(rules: DesignRules): ElementRule[] {
       'font-family': 'ui-monospace, SFMono-Regular, Menlo, monospace',
       'font-size': '0.9em',
       ...(codeOverrides[pick(r, 'codeStyle')] ?? {}),
+      ...customCss(r, 'codeStyle'),
     },
   });
 
@@ -195,7 +214,7 @@ export function compileElementRules(rules: DesignRules): ElementRule[] {
   out.push({
     selector: 'table',
     label: 'Table',
-    declarations: { 'border-collapse': 'collapse', width: '100%', 'font-family': bodyFont },
+    declarations: { 'border-collapse': 'collapse', width: '100%', 'font-family': bodyFont, ...customCss(r, 'tableStyle') },
   });
   out.push({
     selector: 'th',
@@ -224,7 +243,7 @@ export function compileElementRules(rules: DesignRules): ElementRule[] {
   out.push({
     selector: '.faq-item, .faq-item > *',
     label: 'FAQ item',
-    declarations: { 'margin-bottom': '14px', ...(faqOverrides[faqStyle] ?? {}) },
+    declarations: { 'margin-bottom': '14px', ...(faqOverrides[faqStyle] ?? {}), ...customCss(r, 'faqStyle') },
   });
   out.push({
     selector: '.faq-question, .faq-item h3, .faq-item h4',
@@ -253,6 +272,7 @@ export function compileElementRules(rules: DesignRules): ElementRule[] {
       'border-radius': buttonOverrides[pick(r, 'buttonStyle')] ?? '8px',
       padding: '9px 18px',
       display: 'inline-block',
+      ...customCss(r, 'buttonStyle'),
     },
   });
 

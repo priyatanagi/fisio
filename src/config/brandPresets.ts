@@ -58,7 +58,7 @@ export const BRAND_PRESETS: BrandPreset[] = [
       tableStyle: 'lined',
       faqStyle: 'divided',
       lineHeight: '1.8',
-      measureWidth: '62ch',
+      textAlignment: 'justify',
     }),
   },
   {
@@ -79,7 +79,7 @@ export const BRAND_PRESETS: BrandPreset[] = [
       tableStyle: 'header-fill',
       faqStyle: 'card',
       lineHeight: '2',
-      measureWidth: '56ch',
+      textAlignment: 'left',
     }),
   },
   {
@@ -100,7 +100,7 @@ export const BRAND_PRESETS: BrandPreset[] = [
       tableStyle: 'zebra',
       codeStyle: 'outlined',
       lineHeight: '1.45',
-      measureWidth: '80ch',
+      textAlignment: 'left',
     }),
   },
 ];

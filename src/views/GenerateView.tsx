@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { AlertCircle } from 'lucide-react';
 import type { GeneratedArticle, LengthTarget } from '../types/article';
 import type { UserProfile } from '../types/profile';
+import type { MultiAgentConfig } from '../types/provider';
 import type { PipelineConfig } from '../pipeline/stages';
 import type { ArticleRun } from '../app/useArticleRun';
 import { targetWordsForLengthTarget } from '../config/defaultPrompts';
@@ -12,6 +13,7 @@ import { ActivityPanel } from '../components/ActivityPanel';
 
 interface GenerateViewProps {
   profile: UserProfile;
+  multiAgentConfig: MultiAgentConfig;
   pipelineConfig: PipelineConfig;
   onPipelineChange: (config: PipelineConfig) => void;
   articles: GeneratedArticle[];
@@ -25,6 +27,7 @@ interface GenerateViewProps {
  */
 export const GenerateView: React.FC<GenerateViewProps> = ({
   profile,
+  multiAgentConfig,
   pipelineConfig,
   onPipelineChange,
   articles,
@@ -131,6 +134,7 @@ export const GenerateView: React.FC<GenerateViewProps> = ({
           activeFormat={activeFormat}
           onSelectFormat={setActiveFormat}
           profile={profile}
+          multiAgentConfig={multiAgentConfig}
           onRetryCreator={gateOpen ? () => void resume('retry_creator') : undefined}
           onSkipToDesigner={gateOpen ? () => void resume('skip_designer') : undefined}
         />

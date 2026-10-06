@@ -72,7 +72,12 @@ export const TOKEN_GROUPS: TokenGroup[] = [
       { kind: 'text', key: 'headingFont', label: 'Heading font', hint: 'CSS font stack for every heading level.', placeholder: 'system-ui, sans-serif', fallback: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif' },
       { kind: 'text', key: 'bodyFont', label: 'Body font', hint: 'CSS font stack for paragraphs and lists.', placeholder: 'Inter, system-ui, sans-serif', fallback: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif' },
       { kind: 'text', key: 'lineHeight', label: 'Line height', hint: 'Leading for running text. 1.5-1.8 suits most reading.', placeholder: '1.7', fallback: '1.7' },
-      { kind: 'text', key: 'measureWidth', label: 'Line width', hint: 'Max paragraph width. 60-70ch is comfortable.', placeholder: '68ch', fallback: '68ch' },
+      { kind: 'choice', key: 'textAlignment', label: 'Paragraph alignment', hint: 'Align paragraph text left, right, centered, or justified.', fallback: 'left', options: [
+        { value: 'left', label: 'Left' },
+        { value: 'right', label: 'Right' },
+        { value: 'center', label: 'Center' },
+        { value: 'justify', label: 'Justify' },
+      ] },
       { kind: 'text', key: 'h1Size', label: 'H1 size', hint: 'Font size of the top heading.', placeholder: '32px', fallback: '2em' },
       { kind: 'text', key: 'headingWeight', label: 'Heading weight', hint: 'CSS font-weight for headings, e.g. 700.', placeholder: '700', fallback: '700' },
       { kind: 'text', key: 'letterSpacing', label: 'Letter spacing', hint: 'Tracking on headings. Negative tightens large text.', placeholder: '-0.01em', fallback: 'normal' },
@@ -180,6 +185,21 @@ export function withTokenDefaults(rules: DesignRules): DesignRules {
 
 const pick = (rules: DesignRules, key: string) => readToken(rules, { key, fallback: '' } as Token);
 
+export function customDeclarations(rules: DesignRules, key: string): Record<string, string> {
+  const value = pick(rules, key);
+  if (!value.startsWith('custom-css:')) return {};
+  const declarations: [string, string][] = value.slice('custom-css:'.length).split(';').flatMap((declaration) => {
+    const separator = declaration.indexOf(':');
+    if (separator < 1) return [];
+    const property = declaration.slice(0, separator).trim();
+    const content = declaration.slice(separator + 1).trim();
+    if (!/^(--[a-z0-9_-]+|[a-z][a-z0-9-]*)$/i.test(property) || !content || /[{}]/.test(content)) return [];
+    const camelProperty = property.replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase());
+    return [[camelProperty, content] as [string, string]];
+  });
+  return Object.fromEntries(declarations);
+}
+
 /**
  * CSS for the tokens, used by the live preview. Every rule is inlined on the
  * element it applies to because the Designer is asked for inline styles in one
@@ -196,15 +216,19 @@ export function previewStyles(rules: DesignRules): Record<string, React.CSSPrope
   const bodyFont = pick(r, 'bodyFont');
 
   const body: Record<string, string> = {
-    maxWidth: '68ch',
     fontFamily: bodyFont,
     fontSize: '15px',
     lineHeight: '1.7',
+    maxWidth: '72ch',
     'color': text,
+    textAlign: pick(r, 'textAlignment'),
   };
-  if (pick(r, 'bodyStyle') === 'compact') Object.assign(body, { lineHeight: '1.45', maxWidth: '80ch' });
-  if (pick(r, 'bodyStyle') === 'editorial') Object.assign(body, { lineHeight: '1.8', maxWidth: '62ch' });
-  if (pick(r, 'bodyStyle') === 'airy') Object.assign(body, { lineHeight: '2', maxWidth: '56ch' });
+  if (pick(r, 'bodyStyle') === 'compact') Object.assign(body, { fontSize: '13px' });
+  if (pick(r, 'bodyStyle') === 'editorial') Object.assign(body, { fontSize: '16px' });
+  if (pick(r, 'bodyStyle') === 'airy') Object.assign(body, { fontSize: '16px' });
+  body.lineHeight = pick(r, 'lineHeight');
+  Object.assign(body, customDeclarations(r, 'textAlignment'));
+  Object.assign(body, customDeclarations(r, 'bodyStyle'));
 
   const heading: Record<string, string> = {
     fontFamily: headingFont,
@@ -216,22 +240,43 @@ export function previewStyles(rules: DesignRules): Record<string, React.CSSPrope
   if (hStyle === 'editorial') Object.assign(heading, { fontSize: '26px', lineHeight: '1.2', fontWeight: '600' });
   if (hStyle === 'light') Object.assign(heading, { fontWeight: '300', fontSize: '24px' });
   if (hStyle === 'strong') Object.assign(heading, { fontSize: '20px', fontWeight: '700', lineHeight: '1.3' });
+  heading.fontWeight = pick(r, 'headingWeight');
+  heading.letterSpacing = pick(r, 'letterSpacing');
+  Object.assign(heading, customDeclarations(r, 'headingStyle'));
 
   const link: Record<string, string> = { color: primary, fontFamily: bodyFont };
   const linkStyle = pick(r, 'hyperlinkStyle');
   if (linkStyle === 'underline') Object.assign(link, { textDecoration: 'underline', textUnderlineOffset: '2px' });
   if (linkStyle === 'subtle') Object.assign(link, { textDecoration: 'none' });
   if (linkStyle === 'boxed') Object.assign(link, { textDecoration: 'none', background: `${accent}1a`, padding: '1px 6px', borderRadius: '4px' });
+  Object.assign(link, customDeclarations(r, 'hyperlinkStyle'));
 
   const bullet = pick(r, 'bulletStyle');
-  const bulletStyle: Record<string, string> = { paddingLeft: '1.4em', 'margin': '0 0 1em' };
+  const bulletStyle: Record<string, string> = {
+    paddingLeft: '1.4em',
+    margin: '0 0 1em',
+    fontFamily: bodyFont,
+    fontSize: body.fontSize,
+    lineHeight: body.lineHeight,
+    color: text,
+    textAlign: pick(r, 'textAlignment'),
+  };
   if (bullet === 'disc') bulletStyle.listStyleType = 'disc';
   if (bullet === 'dash') bulletStyle.listStyleType = '"– "';
   if (bullet === 'check') bulletStyle.listStyleType = '"✓  "';
   if (bullet === 'square') bulletStyle.listStyleType = 'square';
+  Object.assign(bulletStyle, customDeclarations(r, 'bulletStyle'));
 
   const numbering = pick(r, 'numberingStyle');
-  const numberStyle: Record<string, string> = { ...bulletStyle };
+  const numberStyle: Record<string, string> = {
+    paddingLeft: '1.4em',
+    margin: '0 0 1em',
+    fontFamily: bodyFont,
+    fontSize: body.fontSize,
+    lineHeight: body.lineHeight,
+    color: text,
+    textAlign: pick(r, 'textAlignment'),
+  };
   numberStyle.listStyleType =
     numbering === 'decimal-leading-zero'
       ? 'decimal-leading-zero'
@@ -240,17 +285,20 @@ export function previewStyles(rules: DesignRules): Record<string, React.CSSPrope
         : numbering === 'upper-alpha'
           ? 'upper-alpha'
           : 'decimal';
+  Object.assign(numberStyle, customDeclarations(r, 'numberingStyle'));
 
   const image = pick(r, 'imageStyle');
   const frame: Record<string, string> = { width: '100%', display: 'block' };
   if (image === 'rounded') Object.assign(frame, { borderRadius: '10px', border: `1px solid ${primary}33` });
   if (image === 'bordered') Object.assign(frame, { 'border': `2px solid ${secondary}` });
   if (image === 'framed') Object.assign(frame, { 'border': `8px solid ${background}`, boxShadow: `0 0 0 1px ${primary}44`, borderRadius: '2px' });
+  Object.assign(frame, customDeclarations(r, 'imageStyle'));
 
   const code = pick(r, 'codeStyle');
   const codeStyle: Record<string, string> = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.9em' };
   if (code === 'subtle') Object.assign(codeStyle, { background: `${secondary}12`, padding: '2px 5px', borderRadius: '4px' });
   if (code === 'outlined') Object.assign(codeStyle, { background: background, padding: '3px 6px', 'border': `1px solid ${primary}55`, borderRadius: '4px' });
+  Object.assign(codeStyle, customDeclarations(r, 'codeStyle'));
 
   const quote = pick(r, 'blockquoteStyle');
   const quoteStyle: Record<string, string> = { margin: '1.2em 0', padding: '8px 16px', color: text };
@@ -258,6 +306,7 @@ export function previewStyles(rules: DesignRules): Record<string, React.CSSPrope
   if (quote === 'card') Object.assign(quoteStyle, { background: `${accent}12`, borderRadius: '8px', borderLeft: `3px solid ${accent}` });
   if (quote === 'plain') Object.assign(quoteStyle, { fontStyle: 'italic', borderLeft: 'none', padding: '4px 0 4px 12px' });
   if (quote === 'centered') Object.assign(quoteStyle, { textAlign: 'center', fontStyle: 'italic', borderLeft: 'none' });
+  Object.assign(quoteStyle, customDeclarations(r, 'blockquoteStyle'));
 
   const table = pick(r, 'tableStyle');
   const tableStyle: Record<string, string> = { width: '100%', borderCollapse: 'collapse', fontSize: '13px' };
@@ -267,15 +316,32 @@ export function previewStyles(rules: DesignRules): Record<string, React.CSSPrope
   if (table === 'zebra') { headStyle.borderBottom = `2px solid ${primary}`; Object.assign(cellStyle, { borderBottom: `1px solid ${primary}22` }); }
   if (table === 'lined') { headStyle.borderBottom = `1px solid ${secondary}66`; Object.assign(cellStyle, { borderBottom: `1px solid ${primary}22` }); }
   if (table === 'bordered') { Object.assign(headStyle, { background: `${primary}18`, border: `1px solid ${primary}44` }); Object.assign(cellStyle, { border: `1px solid ${primary}44` }); }
+  const tableCustomStyle = customDeclarations(r, 'tableStyle');
+  Object.assign(tableStyle, tableCustomStyle);
+  Object.assign(headStyle, tableCustomStyle);
+  Object.assign(cellStyle, tableCustomStyle);
+  const rowAlternate: Record<string, string> = {};
+  if (table === 'zebra') rowAlternate.background = `${primary}0d`;
 
   const faq = pick(r, 'faqStyle');
   const faqItem: Record<string, string> = { marginBottom: '14px' };
   const faqQuestion: Record<string, string> = { fontFamily: headingFont, color: secondary, fontWeight: '600', fontSize: '14px', margin: '0 0 4px' };
-  const faqAnswer: Record<string, string> = { margin: '0', color: text, fontSize: '13px', lineHeight: '1.6' };
+  const faqAnswer: Record<string, string> = {
+    margin: '0',
+    color: text,
+    fontFamily: bodyFont,
+    fontSize: body.fontSize,
+    lineHeight: body.lineHeight,
+    textAlign: pick(r, 'textAlignment'),
+  };
   if (faq === 'divided') { faqItem.borderTop = `1px solid ${primary}22`; faqItem.paddingTop = '12px'; }
   if (faq === 'card') { Object.assign(faqItem, { background: background, border: `1px solid ${primary}22`, borderRadius: '8px', padding: '12px' }); }
   if (faq === 'accordion') Object.assign(faqQuestion, { borderLeft: `3px solid ${accent}`, paddingLeft: '8px' });
   if (faq === 'numbered') { faqQuestion.color = primary; faqItem['paddingLeft'] = '4px'; }
+  const faqCustomStyle = customDeclarations(r, 'faqStyle');
+  Object.assign(faqItem, faqCustomStyle);
+  Object.assign(faqQuestion, faqCustomStyle);
+  Object.assign(faqAnswer, faqCustomStyle);
 
   const button = pick(r, 'buttonStyle');
   const buttonStyle: Record<string, string> = {
@@ -290,6 +356,7 @@ export function previewStyles(rules: DesignRules): Record<string, React.CSSPrope
   if (button === 'rounded') buttonStyle.borderRadius = '8px';
   if (button === 'square') buttonStyle.borderRadius = '0';
   if (button === 'pill') buttonStyle.borderRadius = '999px';
+  Object.assign(buttonStyle, customDeclarations(r, 'buttonStyle'));
 
   return {
     page: { background, color: text, fontFamily: bodyFont },
@@ -302,6 +369,7 @@ export function previewStyles(rules: DesignRules): Record<string, React.CSSPrope
     code: codeStyle,
     quote: quoteStyle,
     table: tableStyle,
+    rowAlternate,
     head: headStyle,
     cell: cellStyle,
     faqItem,
