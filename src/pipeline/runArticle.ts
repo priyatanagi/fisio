@@ -17,6 +17,7 @@ import type {
   TargetLanguage,
 } from './stages';
 import { resolveBrief } from './seoBrief';
+import { rulesForFormat } from '../config/brandPresets';
 import { resolveTopicForRun } from './topicFidelity';
 import { runAgent, AgentError } from './runAgent';
 import { extractDocument } from '../utils/document';
@@ -89,11 +90,11 @@ export function formatTargets(
 
 function makeCall(options: RunArticleOptions) {
   const { profile, multiAgentConfig, universalRules, signal, runId, eventLabel } = options;
-  return (role: AnyRole, input: Record<string, unknown>) =>
+  return (role: AnyRole, input: Record<string, unknown>, profileOverride = profile) =>
     runAgent({
       role,
       input,
-      userProfile: profile,
+      userProfile: profileOverride,
       providerConfig: multiAgentConfig[PROVIDER_FOR_ROLE[role]],
       universalRules,
       signal,
@@ -229,6 +230,13 @@ async function runDesignerStage(
           language: target.language,
           cssMode: target.cssMode,
           referenceHtml: reference,
+        }, {
+          ...options.profile,
+          designRules: rulesForFormat(
+            options.profile.designRules,
+            options.profile.formatOverrides ?? {},
+            target.id
+          ),
         });
         results.push({
           id: target.id,

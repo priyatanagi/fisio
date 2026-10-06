@@ -82,10 +82,10 @@ export const TOKEN_GROUPS: TokenGroup[] = [
       { kind: 'text', key: 'headingWeight', label: 'Heading weight', hint: 'CSS font-weight for headings, e.g. 700.', placeholder: '700', fallback: '700' },
       { kind: 'text', key: 'letterSpacing', label: 'Letter spacing', hint: 'Tracking on headings. Negative tightens large text.', placeholder: '-0.01em', fallback: 'normal' },
       { kind: 'choice', key: 'bodyStyle', label: 'Body style', hint: 'Overall density and reading feel of running text.', fallback: 'readable', options: [
-        { value: 'readable', label: 'Readable — 68ch measure, generous leading' },
+        { value: 'readable', label: 'Readable — balanced type size and generous leading' },
         { value: 'compact', label: 'Compact — tight leading, denser page' },
         { value: 'editorial', label: 'Editorial — serif body, wider leading' },
-        { value: 'airy', label: 'Airy — large leading, short measure' },
+        { value: 'airy', label: 'Airy — larger type and spacious leading' },
       ] },
       { kind: 'choice', key: 'headingStyle', label: 'Heading style', hint: 'Weight, case and spacing across h1–h4.', fallback: 'strong', options: [
         { value: 'strong', label: 'Strong — bold, tight, sentence case' },

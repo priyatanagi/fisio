@@ -415,17 +415,17 @@ describe('Designer fan-out', () => {
     expect(result.article!.formats['inline-en']).toContain('padding: 20px');
   });
 
-  it('releases the article width but keeps the paragraph measure', async () => {
+  it('releases the article width and removes the obsolete paragraph measure', async () => {
     const result = await run({}, {
       creator: () => ({ markdownContent: markdown }),
       designer: () => ({
-        html: '<article style="max-width: 1000px; margin: 0 auto;"><p style="max-width: 68ch;">Body</p></article>',
+        html: '<article style="max-width: 1000px; margin: 0 auto;"><p style="width: 68ch;">Body</p></article>',
         warnings: [],
       }),
     });
     const rendered = result.article!.formats['inline-en'];
     expect(rendered).not.toContain('max-width: 1000px');
-    expect(rendered).toContain('max-width: 68ch');
+    expect(rendered).not.toContain('width: 68ch');
   });
 
   it('gives the language that dropped the header the sibling one', async () => {

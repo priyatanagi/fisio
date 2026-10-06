@@ -99,6 +99,21 @@ describe('stripRootWidth', () => {
     expect(out).toMatch(/p\s*\{[^}]*max-width:\s*68ch/);
   });
 
+  it('removes stale character-width caps from text while preserving other styles', () => {
+    const html = '<article><p style="color: #333; width: 68ch; line-height: 1.7;">Text</p></article>';
+    const normalized = normalizeRenderedHtml(html);
+    expect(normalized).not.toMatch(/(?:max-width|width):\s*68ch/i);
+    expect(normalized).toContain('color: #333');
+    expect(normalized).toContain('line-height: 1.7');
+  });
+
+  it('removes character-width caps from text selectors in clean stylesheets', () => {
+    const html = '<style>.article p, .article blockquote { max-width: 68ch; color: #333; }</style><article class="article"><p>Text</p></article>';
+    const normalized = normalizeRenderedHtml(html);
+    expect(normalized).not.toMatch(/(?:max-width|width):\s*68ch/i);
+    expect(normalized).toContain('color: #333');
+  });
+
   it('returns an empty document unchanged', () => {
     expect(stripRootWidth('')).toBe('');
   });

@@ -2,6 +2,7 @@ import type { GeneratedArticle, OutputFormatId } from '../types/article';
 import type { UserProfile } from '../types/profile';
 import type { MultiAgentConfig } from '../types/provider';
 import { DEFAULT_UNIVERSAL_RULES } from '../config/universalRules';
+import { rulesForFormat } from '../config/brandPresets';
 import { runAgent } from './runAgent';
 import { normalizeRenderedHtml } from '../utils/articleShell';
 import { formatFailedChecks, scoreHtml } from './scoreHtml';
@@ -80,7 +81,10 @@ export async function improveArticle(
       seoMetadata: article.seoMetadata,
       markdown: article.rawText ?? '',
     },
-    userProfile: profile,
+    userProfile: {
+      ...profile,
+      designRules: rulesForFormat(profile.designRules, profile.formatOverrides ?? {}, format),
+    },
     providerConfig: multiAgentConfig.designer,
     universalRules: DEFAULT_UNIVERSAL_RULES,
     signal,

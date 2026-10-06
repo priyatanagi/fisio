@@ -6,7 +6,7 @@
  * requested in a prompt: a prompt asks, this module guarantees. Every problem it
  * solves was visible in real output -- a light grey page painted onto the
  * article root, one language shipping a header block the other did not, and the
- * reading measure applied to the article root so the text ran out at 68ch while
+ * reading measure applied to the article root so the text ran out at a fixed measure while
  * the rest of the page stayed empty.
  */
 
@@ -21,6 +21,8 @@ const BOX_DECLARATION = /^(max-?width|width|margin)\s*:/i;
 
 /** Selectors that paint or size the page rather than a component inside it. */
 const PAGE_SELECTOR = /^(html|body|:root|article|main)$/i;
+const TEXT_SELECTOR = /(?:^|[\s>+~])(?:p|h[1-6]|ul|ol|li|blockquote|figcaption|th|td|summary)(?=$|[\s.#:[>+~])/i;
+const CHARACTER_WIDTH_CAP = /^(?:max-?width|width)\s*:\s*[^;]*\bch\b/i;
 
 function declarationsOf(style: string): string[] {
   return style
@@ -134,6 +136,35 @@ export function stripRootWidth(html: string): string {
   return rewriteStylesheet(stripRootInlineStyle(html, drop), rootClasses(html), drop);
 }
 
+/** Remove stale character-based reading measures from text components. */
+export function stripTextMeasure(html: string): string {
+  if (!html) return html;
+  const stripMeasure = (style: string) => declarationsOf(style)
+    .filter((declaration) => !CHARACTER_WIDTH_CAP.test(declaration))
+    .join('; ');
+  const inlineCleaned = html.replace(
+    /<(p|h[1-6]|ul|ol|li|blockquote|figcaption|th|td|summary)\b([^>]*)>/gi,
+    (tag) => tag.replace(
+      /\sstyle="([^"]*)"/i,
+      (_styleAttr: string, style: string) => ` style="${stripMeasure(style)}"`
+    ).replace(/\sstyle=""(?=\s|>)/i, '')
+  );
+  return inlineCleaned.replace(
+    /<style\b[^>]*>([\s\S]*?)<\/style>/gi,
+    (_block, css: string) => `<style>${css.replace(/([^{}]+)\{([^{}]*)\}/g, (rule, selectors: string, body: string) => {
+      const groups = selectors.split(',').map((selector) => selector.trim());
+      const textGroups = groups.filter((selector) => TEXT_SELECTOR.test(selector));
+      const otherGroups = groups.filter((selector) => !TEXT_SELECTOR.test(selector));
+      if (!textGroups.length) return rule;
+      const textStyle = stripMeasure(body);
+      return [
+        ...(otherGroups.length ? [`${otherGroups.join(', ')}{${body}}`] : []),
+        ...(textStyle ? [`${textGroups.join(', ')}{${textStyle}}`] : []),
+      ].join('\n');
+    })}</style>`
+  );
+}
+
 /** The opening `<header ...>` tag of a render, with its style, or null. */
 function headerOpenTag(html: string): string | null {
   const match = html.match(/<header\b[^>]*>/i);
@@ -188,5 +219,5 @@ export function structuralGaps(referenceHtml: string, targetHtml: string): strin
  * supplied.
  */
 export function normalizeRenderedHtml(html: string, referenceHtml?: string): string {
-  return alignHeaderWithReference(stripRootWidth(stripRootBackground(html)), referenceHtml);
+  return alignHeaderWithReference(stripTextMeasure(stripRootWidth(stripRootBackground(html))), referenceHtml);
 }

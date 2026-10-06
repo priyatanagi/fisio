@@ -68,6 +68,7 @@ describe('buildImproverPrompt', () => {
     const prompt = buildImproverPrompt(input, DEFAULT_USER_PROFILE);
     expect(prompt).toMatch(/never paint a page background/i);
     expect(prompt).toMatch(/never cap the article width/i);
+    expect(prompt).toMatch(/Remove any width or max-width measured in ch units/i);
   });
 
   it('asks for the whole document, not a diff', () => {
@@ -88,10 +89,10 @@ describe('buildDesignerPrompt', () => {
     expect(prompt).toMatch(/component surfaces only/i);
   });
 
-  it('forbids capping the article width and asks for the measure on paragraphs', () => {
+  it('forbids capping the article or text component widths', () => {
     const prompt = buildDesignerPrompt(base, DEFAULT_USER_PROFILE);
     expect(prompt).toMatch(/fills the width of the container/);
-    expect(prompt).toMatch(/Apply the reading measure to the paragraphs/);
+    expect(prompt).toMatch(/Never set width or max-width in ch units on paragraphs or other text components/);
   });
 
   it('asks for a header block, which one language was shipping and the other was not', () => {

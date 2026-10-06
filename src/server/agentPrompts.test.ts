@@ -109,6 +109,31 @@ describe('user intent lock', () => {
     expect(prompt).toMatch(/Write about the ORIGINAL USER TOPIC/);
   });
 
+  it('injects the current profile design settings into the Creator prompt', () => {
+    const profile = {
+      ...DEFAULT_USER_PROFILE,
+      designRules: {
+        ...DEFAULT_USER_PROFILE.designRules,
+        bulletStyle: 'check',
+        numberingStyle: 'upper-alpha',
+        tableStyle: 'zebra',
+        blockquoteStyle: 'centered',
+        faqStyle: 'card',
+        textAlignment: 'justify',
+      },
+    };
+    const prompt = buildCreatorPrompt(
+      { seedTopic: 'A practical guide', targetWords: 900, brief: null },
+      profile
+    );
+    expect(prompt).toContain('Bulleted list: check');
+    expect(prompt).toContain('Numbered list: upper-alpha');
+    expect(prompt).toContain('Table: zebra');
+    expect(prompt).toContain('Blockquote: centered');
+    expect(prompt).toContain('FAQ: card');
+    expect(prompt).toContain('Paragraph alignment: justify');
+  });
+
   it('still locks the topic when no separate original exists', () => {
     const prompt = buildCreatorPrompt(
       { seedTopic: 'Treadmill guide', targetWords: 900, brief: null },

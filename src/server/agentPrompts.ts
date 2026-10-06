@@ -218,10 +218,18 @@ export function buildCreatorPrompt(
   const pinnedKeyword = input.focusKeyphrase?.trim()
     ? `\nPINNED FOCUS KEYPHRASE (use this exact phrase; it overrides any other keyphrase from the brief): "${input.focusKeyphrase.trim()}"\n`
     : '';
+  const designRules = withTokenDefaults(profile.designRules);
+  const contentStyle = [
+    'CURRENT PROFILE DESIGN SETTINGS (use the matching Markdown structures; the Designer applies exact visual styles from the same current profile):',
+    ...ALL_TOKENS.map((token) => `- ${token.label}: ${readToken(designRules, token)}.`),
+    '- Use relevant lists, comparison tables, quotations, and FAQ sections when they help answer the topic; do not add empty or irrelevant components.',
+    '- Keep paragraph measure fluid: never add width or max-width in ch units to text.',
+  ].join('\n');
 
   return `You are the Creator: a long-form article writer.
 
 ${buildBrandBlock(profile)}
+${contentStyle}
 ${buildUniversalRulesBlock(DEFAULT_UNIVERSAL_RULES)}
 
 TOPIC: "${input.seedTopic}"
@@ -327,6 +335,7 @@ RULES:
 - Never remove a section, an image, a link or an FAQ to make a check pass.
 - The article must stay in ${langName}; do not switch languages.
 - Never paint a page background and never cap the article width; the host page owns both.
+- Remove any width or max-width measured in ch units from paragraphs or other text components; keep their width fluid.
 - Return the whole repaired HTML document, not a diff and not a fragment.
 
 Respond with ONLY this JSON shape:
@@ -379,7 +388,7 @@ RULES:
 ${modeRules}
 - Preserve all content, headings, lists and structure exactly as written.
 - Never introduce a colour that is not in the brand design tokens above.
-- The article fills the width of the container it is placed in. Never set max-width, width or margin on the <article>, <body> or <main> element. Apply the reading measure to the paragraphs instead.
+- The article fills the width of the container, and text components fill the available content width. Never set width or max-width in ch units on paragraphs or other text components. Never set max-width, width or margin on the <article>, <body> or <main> element.
 - Never paint a page background. Set no background, background-color or background-image on the <article>, <body> or <main> element: the host page provides the surface, and it must show through. The background colour token is only for components inside the article, such as callouts, table headers and FAQ cards.
 - Start the article body with a <header> element containing the H1, then the sections.
 ${reference}
