@@ -25,6 +25,7 @@ export interface DesignRules {
   bulletStyle?: string;
   numberingStyle?: string;
   imageStyle?: string;
+  captionStyle?: string;
   codeStyle?: string;
   tableStyle?: string;
   faqStyle?: string;

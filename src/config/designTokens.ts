@@ -123,6 +123,12 @@ export const TOKEN_GROUPS: TokenGroup[] = [
         { value: 'bordered', label: 'Bordered — square with rule' },
         { value: 'framed', label: 'Framed — matte inset with caption rule' },
       ] },
+      { kind: 'choice', key: 'captionStyle', label: 'Image caption', hint: 'Typography and decoration for figure captions.', fallback: 'subtle', options: [
+        { value: 'subtle', label: 'Subtle — muted text' },
+        { value: 'centered', label: 'Centered — centered muted text' },
+        { value: 'accent', label: 'Accent — brand-coloured text' },
+        { value: 'boxed', label: 'Boxed — soft background panel' },
+      ] },
       { kind: 'choice', key: 'codeStyle', label: 'Code', hint: 'Treatment of inline and block code.', fallback: 'subtle', options: [
         { value: 'subtle', label: 'Subtle — tinted background' },
         { value: 'outlined', label: 'Outlined — bordered block' },
@@ -358,6 +364,24 @@ export function previewStyles(rules: DesignRules): Record<string, React.CSSPrope
   if (button === 'pill') buttonStyle.borderRadius = '999px';
   Object.assign(buttonStyle, customDeclarations(r, 'buttonStyle'));
 
+  const captionStyle: Record<string, string> = {
+    color: `${secondary}99`,
+    fontSize: '11px',
+    margin: '8px 0 0',
+    fontFamily: bodyFont,
+    lineHeight: '1.5',
+  };
+  const caption = pick(r, 'captionStyle');
+  if (caption === 'centered') captionStyle.textAlign = 'center';
+  if (caption === 'accent') captionStyle.color = accent;
+  if (caption === 'boxed') Object.assign(captionStyle, {
+    color: secondary,
+    background: `${primary}0d`,
+    borderLeft: `2px solid ${primary}`,
+    padding: '8px 10px',
+  });
+  Object.assign(captionStyle, customDeclarations(r, 'captionStyle'));
+
   return {
     page: { background, color: text, fontFamily: bodyFont },
     heading,
@@ -376,6 +400,6 @@ export function previewStyles(rules: DesignRules): Record<string, React.CSSPrope
     faqQuestion,
     faqAnswer,
     button: buttonStyle,
-    caption: { color: `${secondary}99`, fontSize: '11px', margin: '6px 0 0', fontFamily: bodyFont },
+    caption: captionStyle,
   } as Record<string, React.CSSProperties>;
 }

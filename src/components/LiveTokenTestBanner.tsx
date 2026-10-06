@@ -68,7 +68,7 @@ export const LiveTokenTestBanner: React.FC<LiveTokenTestBannerProps> = ({ rules,
             </li>
           </ul>
 
-          <figure style={{ margin: 0 }}>
+          <figure style={{ margin: '0 0 1.5em' }}>
               <div
                 role="img"
               aria-label="Placeholder for an article image"

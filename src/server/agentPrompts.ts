@@ -74,6 +74,7 @@ export function buildDesignTokenBlock(rules: DesignRules): string {
     line('Bullets', t('bulletStyle')),
     line('Numbering', t('numberingStyle')),
     line('Image frame', t('imageStyle')),
+    line('Image caption', t('captionStyle')),
     line('Code', t('codeStyle')),
     line('Table', t('tableStyle')),
     line('FAQ', t('faqStyle')),
