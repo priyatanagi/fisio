@@ -335,7 +335,6 @@ export const UserProfileForm: React.FC<UserProfileFormProps> = ({ profile, onSav
             ))}
           </div>
         </div>
-        </div>
         <div
           role="separator"
           aria-label="Resize design controls and live preview"
