@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Building2, Check, Palette, Plus, ShieldCheck, SlidersHorizontal, X } from 'lucide-react';
 import type { UserProfile } from '../types/profile';
 import { DEFAULT_USER_PROFILE, FALLBACK_BRAND, isProfileConfigured } from '../types/profile';
@@ -151,6 +151,8 @@ export const UserProfileForm: React.FC<UserProfileFormProps> = ({ profile, onSav
   const [hasChanges, setHasChanges] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved');
   const [section, setSection] = useState<'business' | 'brand' | 'design' | 'rules'>('business');
+  const [previewWidth, setPreviewWidth] = useState(50);
+  const designLayoutRef = useRef<HTMLDivElement>(null);
   const [newExclusion, setNewExclusion] = useState('');
   const [overrides, setOverrides] = useState<FormatOverrides>(
     () => profile.formatOverrides ?? {}
@@ -297,8 +299,13 @@ export const UserProfileForm: React.FC<UserProfileFormProps> = ({ profile, onSav
         />
       </section>}
 
-      {section === 'design' && <section className="w-full space-y-5">
-        <div className="w-full space-y-3 bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+      {section === 'design' && <section className="w-full">
+        <div
+          ref={designLayoutRef}
+          className="grid grid-cols-1 items-start gap-3 xl:grid-cols-[minmax(0,var(--controls-width))_12px_minmax(0,var(--preview-width))]"
+          style={{ '--controls-width': `${100 - previewWidth}fr`, '--preview-width': `${previewWidth}fr` } as React.CSSProperties}
+        >
+        <div className="min-w-0 space-y-3 rounded-xl border border-zinc-800 bg-zinc-900 p-4">
           <div>
             <h3 className="text-xs font-semibold text-zinc-200">Design tokens</h3>
             <p className="text-[11px] text-zinc-500">
@@ -314,7 +321,7 @@ export const UserProfileForm: React.FC<UserProfileFormProps> = ({ profile, onSav
                   </h4>
                   <p className="text-[10px] text-zinc-500 leading-relaxed">{group.summary}</p>
                 </div>
-              <div className={group.id === 'color' ? 'grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-2' : 'grid grid-cols-1 sm:grid-cols-2 gap-3'}>
+              <div className={group.id === 'color' ? 'grid grid-cols-2 sm:grid-cols-3 gap-2' : 'grid grid-cols-1 sm:grid-cols-2 gap-3'}>
                   {group.tokens.map((token) => (
                     <TokenField
                       key={token.key}
@@ -328,7 +335,38 @@ export const UserProfileForm: React.FC<UserProfileFormProps> = ({ profile, onSav
             ))}
           </div>
         </div>
-        <LiveTokenTestBanner rules={draft.designRules} profile={draft} />
+        </div>
+        <div
+          role="separator"
+          aria-label="Resize design controls and live preview"
+          aria-orientation="vertical"
+          aria-valuemin={30}
+          aria-valuemax={70}
+          aria-valuenow={previewWidth}
+          tabIndex={0}
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={(event) => {
+            if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+            const bounds = designLayoutRef.current?.getBoundingClientRect();
+            if (!bounds) return;
+            const ratio = (event.clientX - bounds.left) / bounds.width;
+            setPreviewWidth(Math.min(70, Math.max(30, (1 - ratio) * 100)));
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+            event.preventDefault();
+            setPreviewWidth((width) => Math.min(70, Math.max(30, width + (event.key === 'ArrowLeft' ? -2 : 2))));
+          }}
+          className="hidden cursor-col-resize touch-none items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-teal-400 xl:flex"
+        >
+          <span className="h-12 w-1 rounded-full bg-zinc-700" />
+        </div>
+        <div className="min-w-0 xl:sticky xl:top-4">
+          <LiveTokenTestBanner rules={draft.designRules} profile={draft} />
+        </div>
+        </div>
       </section>}
 
       {section === 'rules' && <section className="space-y-3 bg-zinc-900 border border-zinc-800 rounded-xl p-4">

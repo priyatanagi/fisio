@@ -220,6 +220,7 @@ export default function App() {
         <GenerateView
           profile={profile}
           multiAgentConfig={multiAgentConfig}
+          onMultiAgentConfigChange={handleSaveMultiAgent}
           pipelineConfig={pipelineConfig}
           onPipelineChange={handleSavePipeline}
           articles={articles}

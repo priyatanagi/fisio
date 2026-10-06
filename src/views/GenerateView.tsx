@@ -10,10 +10,12 @@ import { PipelineSettingsPanel } from '../components/PipelineSettingsPanel';
 import { TopicConsole } from '../components/TopicConsole';
 import { ArticleWorkspace } from '../components/ArticleWorkspace';
 import { ActivityPanel } from '../components/ActivityPanel';
+import { ProcessProviderSelector } from '../components/ProcessProviderSelector';
 
 interface GenerateViewProps {
   profile: UserProfile;
   multiAgentConfig: MultiAgentConfig;
+  onMultiAgentConfigChange: (config: MultiAgentConfig) => void;
   pipelineConfig: PipelineConfig;
   onPipelineChange: (config: PipelineConfig) => void;
   articles: GeneratedArticle[];
@@ -28,6 +30,7 @@ interface GenerateViewProps {
 export const GenerateView: React.FC<GenerateViewProps> = ({
   profile,
   multiAgentConfig,
+  onMultiAgentConfigChange,
   pipelineConfig,
   onPipelineChange,
   articles,
@@ -74,6 +77,7 @@ export const GenerateView: React.FC<GenerateViewProps> = ({
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
+      <ProcessProviderSelector config={multiAgentConfig} onChange={onMultiAgentConfigChange} />
       <PipelineSettingsPanel config={pipelineConfig} onChange={onPipelineChange} />
 
       {error && (
