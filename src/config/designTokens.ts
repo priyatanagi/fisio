@@ -219,7 +219,7 @@ export function previewStyles(rules: DesignRules): Record<string, React.CSSPrope
     fontFamily: bodyFont,
     fontSize: '15px',
     lineHeight: '1.7',
-    maxWidth: '72ch',
+    width: '100%',
     'color': text,
     textAlign: pick(r, 'textAlignment'),
   };
