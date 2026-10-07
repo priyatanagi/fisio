@@ -22,7 +22,8 @@ const BOX_DECLARATION = /^(max-?width|width|margin)\s*:/i;
 /** Selectors that paint or size the page rather than a component inside it. */
 const PAGE_SELECTOR = /^(html|body|:root|article|main)$/i;
 const TEXT_SELECTOR = /(?:^|[\s>+~])(?:p|h[1-6]|ul|ol|li|blockquote|figcaption|th|td|summary)(?=$|[\s.#:[>+~])/i;
-const CHARACTER_WIDTH_CAP = /^(?:max-?width|width)\s*:\s*[^;]*\bch\b/i;
+/** A character-based reading measure. The unit sits flush against the number, so `\bch` never matches. */
+const CHARACTER_WIDTH_CAP = /^(?:max-?width|width)\s*:\s*[^;]*\d+(?:\.\d+)?ch\b/i;
 
 function declarationsOf(style: string): string[] {
   return style

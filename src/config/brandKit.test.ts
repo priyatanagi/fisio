@@ -264,9 +264,14 @@ describe('applyTokenCss', () => {
   });
 
   it('preserves declarations the model set that are not tokens', () => {
-    const { html } = applyTokenCss('<p style="text-align:center;padding:12px">x</p>', base);
-    expect(html).toContain('text-align: center');
+    const { html } = applyTokenCss('<p style="padding:12px;text-indent:4px">x</p>', base);
     expect(html).toContain('padding: 12px');
+    expect(html).toContain('text-indent: 4px');
+  });
+
+  it('lets the paragraph alignment token override the model value', () => {
+    const { html } = applyTokenCss('<p style="text-align:center">x</p>', base);
+    expect(html).toContain(`text-align: ${base.textAlignment}`);
   });
 
   it('makes brand tokens win over the model value', () => {
