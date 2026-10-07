@@ -94,7 +94,14 @@ export const TopicConsole: React.FC<TopicConsoleProps> = ({
   };
 
   const selectAllFormats = () => {
-    setTargetFormats(['inline-en', 'inline-id', 'clean-en', 'clean-id']);
+    setTargetFormats([
+      'inline-en',
+      'inline-id',
+      'clean-en',
+      'clean-id',
+      'json-en',
+      'json-id',
+    ]);
   };
 
   const activeSegmentData = RESEARCH_KEYWORD_SEGMENTS.find((s) => s.id === selectedSegment);
@@ -280,12 +287,12 @@ export const TopicConsole: React.FC<TopicConsoleProps> = ({
         )}
       </div>
 
-      {/* Output Formats Multi-Select: Four Formats (inline-en, inline-id, clean-en, clean-id) */}
+      {/* Output Formats Multi-Select: Four HTML modes plus the JSON package */}
       <div className="bg-zinc-950/90 border border-zinc-800 rounded-lg p-3 space-y-2">
         <div className="flex items-center justify-between text-xs">
           <div className="flex items-center gap-1.5 font-medium text-zinc-300">
             <Layers className="w-3.5 h-3.5 text-zinc-400" />
-            <span>Target Output Formats (Total 4 Formats)</span>
+            <span>Target Output Formats (Total 6 Formats)</span>
           </div>
           <button
             type="button"
@@ -293,16 +300,18 @@ export const TopicConsole: React.FC<TopicConsoleProps> = ({
             disabled={isGenerating}
             className="text-[11px] text-zinc-400 hover:text-zinc-200 underline font-mono"
           >
-            Select All 4 Formats
+            Select All 6 Formats
           </button>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
           {[
             { id: 'inline-en' as OutputFormatId, label: 'Inline CSS (EN)', desc: 'Mode 1 English' },
             { id: 'inline-id' as OutputFormatId, label: 'Inline CSS (ID)', desc: 'Mode 1 Indonesia' },
             { id: 'clean-en' as OutputFormatId, label: 'Clean HTML (EN)', desc: 'Mode 2 English' },
             { id: 'clean-id' as OutputFormatId, label: 'Clean HTML (ID)', desc: 'Mode 2 Indonesia' },
+            { id: 'json-en' as OutputFormatId, label: 'JSON (EN)', desc: 'Mode 3 English' },
+            { id: 'json-id' as OutputFormatId, label: 'JSON (ID)', desc: 'Mode 3 Indonesia' },
           ].map((fmt) => {
             const isSelected = targetFormats.includes(fmt.id);
             return (

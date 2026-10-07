@@ -72,6 +72,11 @@ export function buildArticleFolder(article: GeneratedArticle): ArticleFile[] {
     });
   }
 
+  const jsonEn = article.formats?.['json-en'];
+  const jsonId = article.formats?.['json-id'];
+  if (jsonEn) files.push({ name: `${slug}-json-en.json`, content: jsonEn });
+  if (jsonId) files.push({ name: `${slug}-json-id.json`, content: jsonId });
+
   if (article.seoMetadataEn) {
     files.push({
       name: `${slug}-seo-metadata-en.json`,
@@ -138,6 +143,9 @@ function buildMetadataSummary(article: GeneratedArticle): string {
     `Meta Description: ${meta?.metaDescription ?? ''}`,
     `URL Slug        : ${meta?.urlSlug ?? ''}`,
     `Tags            : ${(meta?.tags ?? []).join(', ')}`,
+    `Category        : ${meta?.category ?? ''}`,
+    `Excerpt         : ${meta?.excerpt ?? ''}`,
+    `Keywords        : ${(meta?.keywords ?? []).join(', ')}`,
     '',
     '=========================================',
     'ARTICLE PERFORMANCE METRICS',

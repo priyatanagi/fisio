@@ -133,7 +133,7 @@ export const DEFAULT_PIPELINE_CONFIG: PipelineConfig = {
   judge: true,
   impower: 'standard',
   reviewer: 'strict',
-  targetFormats: ['inline-en', 'inline-id', 'clean-en', 'clean-id'],
+  targetFormats: ['inline-en', 'inline-id', 'clean-en', 'clean-id', 'json-en', 'json-id'],
   languages: ['en', 'id'],
   targetWords: 950,
   lengthTarget: 'standard',

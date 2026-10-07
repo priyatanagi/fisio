@@ -39,6 +39,19 @@ describe('buildArticleFolder', () => {
     expect(names).toContain('treadmill-guide-clean-en.html');
   });
 
+  it('includes a JSON package as a .json file', () => {
+    const files = buildArticleFolder(
+      article({
+        formats: {
+          ...article().formats,
+          'json-en': JSON.stringify({ title: 'Treadmill guide', body: '<p>Body</p>' }),
+        },
+      })
+    );
+    const pkg = files.find((f) => f.name === 'treadmill-guide-json-en.json');
+    expect(JSON.parse(pkg!.content)).toHaveProperty('title', 'Treadmill guide');
+  });
+
   it('includes a metadata summary', () => {
     const files = buildArticleFolder(article());
     const meta = files.find((f) => f.name.endsWith('-seo-metadata.txt'));

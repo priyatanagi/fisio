@@ -173,7 +173,10 @@ Respond with ONLY this JSON shape:
     "focusKeyphrase": "max 20 chars",
     "metaDescription": "max 155 chars, contains the focus keyphrase",
     "urlSlug": "kebab-case-slug",
-    "tags": ["5 tags"]
+    "tags": ["5 tags"],
+    "category": "2 to 4 words, the editorial section this article belongs in, e.g. Gym Planning",
+    "excerpt": "one sentence, max 160 chars, what the reader gets",
+    "keywords": ["3 to 5 search phrases a buyer would type"]
   },
   "secondaryKeywords": ["..."],
   "outline": [{ "heading": "H2 text", "mustCover": ["what this section must include"] }],

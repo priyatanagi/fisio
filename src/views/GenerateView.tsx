@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { AlertCircle } from 'lucide-react';
 import type { GeneratedArticle, LengthTarget } from '../types/article';
 import type { UserProfile } from '../types/profile';
@@ -75,6 +75,17 @@ export const GenerateView: React.FC<GenerateViewProps> = ({
     }
   }, [articles]);
 
+  // Manual edits commit through App state, not the run's own copy, so read the
+  // article back out of the list: the workspace must show what the last write
+  // stored. A derived JSON package has nothing else to rebuild it from.
+  const liveArticle = useMemo(
+    () =>
+      currentArticle
+        ? (articles.find((a) => a.id === currentArticle.id) ?? currentArticle)
+        : null,
+    [articles, currentArticle]
+  );
+
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
       <ProcessProviderSelector config={multiAgentConfig} onChange={onMultiAgentConfigChange} />
@@ -131,9 +142,9 @@ export const GenerateView: React.FC<GenerateViewProps> = ({
         />
       )}
 
-      {currentArticle && !isGenerating && (
+      {liveArticle && !isGenerating && (
         <ArticleWorkspace
-          article={currentArticle}
+          article={liveArticle}
           onUpdateArticle={onUpdateArticle}
           activeFormat={activeFormat}
           onSelectFormat={setActiveFormat}

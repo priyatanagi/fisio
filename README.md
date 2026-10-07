@@ -153,9 +153,12 @@ cost for a single format:
 | max | 5 | 6 | 6 (8 with revision) |
 
 Judge adds one call when enabled. Default config: Judge on, Impower `standard`, Reviewer `strict`,
-all four formats (`inline-en`, `inline-id`, `clean-en`, `clean-id`), languages `en`+`id`,
-950 target words. Persisted configs are **sanitized on read** (`src/app/pipelineConfig.ts`) so a
-damaged or hand-edited value falls back to defaults instead of silently enabling a stage.
+all six formats (`inline-en`, `inline-id`, `clean-en`, `clean-id`, `json-en`, `json-id`), languages
+`en`+`id`, 950 target words. The `json-*` formats cost no provider call — they are assembled from
+the resolved SEO metadata plus that language's rendered body (`src/utils/articleJson.ts`), and the
+Designer fan-out skips them. Persisted configs are **sanitized on read**
+(`src/app/pipelineConfig.ts`) so a damaged or hand-edited value falls back to defaults instead of
+silently enabling a stage.
 
 - **Reviewer modes** — `off` (no gate), `advisory` (reports but never blocks), `strict` (blocks with
   one automatic revision).

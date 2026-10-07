@@ -23,6 +23,7 @@ import { runAgent, AgentError } from './runAgent';
 import { extractDocument } from '../utils/document';
 import { readabilityFromText } from '../utils/readability';
 import { normalizeRenderedHtml } from '../utils/articleShell';
+import { isJsonFormat, syncJsonFormats } from '../utils/articleJson';
 import { seedMetadataVersions } from '../utils/metadataVersions';
 import { scoreDraft, type ArticleScore } from './scoreArticle';
 
@@ -204,7 +205,11 @@ async function runDesignerStage(
   const call = makeCall(options);
 
   onStage('designing', 'Rendering HTML formats...');
-  const targets = formatTargets(config.targetFormats, config.languages);
+  // The JSON package is assembled from the metadata and the rendered body, so it
+  // is not a Designer target; buildArticle adds it once both exist.
+  const targets = formatTargets(config.targetFormats, config.languages).filter(
+    (target) => !isJsonFormat(target.id)
+  );
 
   // The languages are generated independently, so they drift: one ships a header
   // block and a centred H1 the other has no styling for at all. Within a CSS
@@ -531,6 +536,18 @@ function buildArticle(params: BuildArticleParams): GeneratedArticle {
 
   const generatedAt = new Date().toISOString();
 
+  // A JSON package is assembled, not rendered: the metadata this run resolved
+  // plus the body of the language it names. Sizing the keys up front lets
+  // syncJsonFormats drop a package whose language rendered no HTML.
+  const bundleWithTargets: Record<string, string> = { ...formatsBundle };
+  for (const target of formatTargets(options.config.targetFormats, options.config.languages)) {
+    if (isJsonFormat(target.id)) bundleWithTargets[target.id] ??= '';
+  }
+  const formats = syncJsonFormats(bundleWithTargets, metadata, generatedAt, {
+    categoryFallback: options.profile.niche,
+    keywordFallback: brief?.secondaryKeywords ?? [],
+  });
+
   return {
     id: params.articleId ?? `art_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     topic: refinedTopic,
@@ -540,7 +557,7 @@ function buildArticle(params: BuildArticleParams): GeneratedArticle {
     lengthTarget: options.config.lengthTarget ?? 'custom',
     targetWordCount: options.config.targetWords,
     targetFormats: options.config.targetFormats,
-    formats: formatsBundle as GeneratedArticle['formats'],
+    formats: formats as GeneratedArticle['formats'],
     seoMetadata: metadata,
     seoMetadataEn: options.config.languages.includes('en') ? metadata : undefined,
     seoMetadataId: options.config.languages.includes('id') ? metadata : undefined,

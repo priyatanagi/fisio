@@ -492,6 +492,52 @@ describe('Designer fan-out', () => {
   });
 });
 
+describe('JSON package', () => {
+  it('assembles a package without a Designer call', async () => {
+    const result = await run(
+      { targetFormats: ['clean-en', 'json-en'], languages: ['en'] },
+      {
+        creator: () => ({ markdownContent: markdown }),
+        designer: () => ({ html, warnings: [] }),
+      }
+    );
+    expect(calls.designer).toBe(1);
+    const payload = JSON.parse(result.article!.formats['json-en']!);
+    expect(payload.body).toBe('<p>Body</p>');
+    expect(payload.slug).toBe(result.article!.seoMetadata.urlSlug);
+    expect(payload.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('takes the body from its own language', async () => {
+    const result = await run(
+      { targetFormats: ['inline-en', 'inline-id', 'json-en', 'json-id'], languages: ['en', 'id'] },
+      {
+        creator: () => ({ markdownContent: markdown }),
+        designer: (input: any) => ({
+          html: `<article><p>${input.language}</p></article>`,
+          warnings: [],
+        }),
+      }
+    );
+    expect(JSON.parse(result.article!.formats['json-en']!).body).toBe('<p>en</p>');
+    expect(JSON.parse(result.article!.formats['json-id']!).body).toBe('<p>id</p>');
+  });
+
+  it('drops the package for a language that rendered no HTML', async () => {
+    const result = await run(
+      { targetFormats: ['inline-en', 'inline-id', 'json-id'], languages: ['en', 'id'] },
+      {
+        creator: () => ({ markdownContent: markdown }),
+        designer: (input: any) => ({
+          html: input.language === 'en' ? html : '',
+          warnings: [],
+        }),
+      }
+    );
+    expect(result.article!.formats['json-id']).toBeUndefined();
+  });
+});
+
 describe('failure handling', () => {
   it('returns failed rather than throwing when a stage throws', async () => {
     const result = await run({}, {

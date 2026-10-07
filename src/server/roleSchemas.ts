@@ -94,6 +94,9 @@ function coerceBrief(
       metaDescription: str(meta.metaDescription),
       urlSlug: str(meta.urlSlug),
       tags: strList(meta.tags),
+      category: str(meta.category),
+      excerpt: str(meta.excerpt),
+      keywords: strList(meta.keywords),
     },
     secondaryKeywords: strList(obj.secondaryKeywords),
     outline: Array.isArray(obj.outline)

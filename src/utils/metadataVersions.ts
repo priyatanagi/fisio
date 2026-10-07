@@ -18,7 +18,12 @@ export function formatVersionStamp(iso: string): string {
 }
 
 function clone(metadata: SeoMetadata): SeoMetadata {
-  return { ...metadata, tags: [...(metadata.tags ?? [])] };
+  const copy: SeoMetadata = { ...metadata, tags: [...(metadata.tags ?? [])] };
+  // Only the fields the article actually carries: a version that invents an empty
+  // keyword list would read back as "the model gave no keywords" for a run that
+  // predates the field.
+  if (metadata.keywords) copy.keywords = [...metadata.keywords];
+  return copy;
 }
 
 /**
@@ -87,13 +92,18 @@ export function metadataDiff(
   version: SeoMetadata,
   current: SeoMetadata
 ): { field: string; from: string; to: string }[] {
+  const joinList = (value: unknown) =>
+    Array.isArray(value) ? value.join(', ') : String(value ?? '');
   const fields: { field: string; key: keyof SeoMetadata; join?: (value: unknown) => string }[] = [
     { field: 'SEO Title', key: 'seoTitle' },
     { field: 'Headline', key: 'headline' },
     { field: 'Focus Keyphrase', key: 'focusKeyphrase' },
     { field: 'Meta Description', key: 'metaDescription' },
     { field: 'URL Slug', key: 'urlSlug' },
-    { field: 'Tags', key: 'tags', join: (value) => (Array.isArray(value) ? value.join(', ') : String(value ?? '')) },
+    { field: 'Tags', key: 'tags', join: joinList },
+    { field: 'Category', key: 'category' },
+    { field: 'Excerpt', key: 'excerpt' },
+    { field: 'Keywords', key: 'keywords', join: joinList },
   ];
   return fields
     .map(({ field, key, join }) => {

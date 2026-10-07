@@ -12,7 +12,13 @@ export type LanguageOption = 'en' | 'id' | 'es' | 'de' | 'fr';
 
 export type LengthTarget = 'short' | 'standard' | 'long' | 'custom';
 
-export type OutputFormatId = 'inline-en' | 'inline-id' | 'clean-en' | 'clean-id';
+export type OutputFormatId =
+  | 'inline-en'
+  | 'inline-id'
+  | 'clean-en'
+  | 'clean-id'
+  | 'json-en'
+  | 'json-id';
 
 export interface SeoMetadata {
   seoTitle: string;
@@ -21,6 +27,12 @@ export interface SeoMetadata {
   metaDescription: string;
   urlSlug: string;
   tags: string[];
+  /** Content category used by the JSON package, e.g. "Gym Planning". */
+  category?: string;
+  /** Short summary for the JSON package; falls back to the meta description. */
+  excerpt?: string;
+  /** Search keywords beside the focus keyphrase. */
+  keywords?: string[];
 }
 
 export interface ImagePromptItem {
@@ -45,6 +57,8 @@ export interface FormatsBundle {
   'inline-id'?: string;
   'clean-en'?: string;
   'clean-id'?: string;
+  'json-en'?: string;
+  'json-id'?: string;
 }
 
 export interface MetadataVersion {

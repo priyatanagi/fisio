@@ -41,13 +41,14 @@ import {
   Lock,
   History,
 } from 'lucide-react';
-import { GeneratedArticle, OutputFormatId, SeoMetadata } from '../types/article';
+import { GeneratedArticle, FormatsBundle, OutputFormatId, SeoMetadata } from '../types/article';
 import type { UserProfile } from '../types/profile';
 import type { MultiAgentConfig } from '../types/provider';
 import { copyToClipboard, downloadFile, downloadAllAsZip } from '../utils/exportUtils';
 import { ReadabilityScorecard } from './ReadabilityScorecard';
 import { SeoChecklistPanel } from './SeoChecklistPanel';
 import { isCleanHtmlIncomplete, synthesizeCleanHtml } from '../utils/cleanHtmlUtils';
+import { isJsonFormat, jsonPackageBody, syncJsonFormats } from '../utils/articleJson';
 import { improveArticle } from '../pipeline/improveArticle';
 import { normalizeRenderedHtml } from '../utils/articleShell';
 import { scoreHtml } from '../pipeline/scoreHtml';
@@ -103,6 +104,18 @@ const FORMAT_OPTIONS: { id: OutputFormatId; name: string; lang: 'en' | 'id'; des
     name: 'Clean Semantic HTML (Bahasa Indonesia)',
     lang: 'id',
     desc: 'Markup semantik + <style> + <script> • Accordion FAQ interaktif',
+  },
+  {
+    id: 'json-en',
+    name: 'JSON Package (English)',
+    lang: 'en',
+    desc: 'Metadata + body HTML as one JSON object • Headless CMS ready',
+  },
+  {
+    id: 'json-id',
+    name: 'JSON Package (Bahasa Indonesia)',
+    lang: 'id',
+    desc: 'Metadata + body HTML dalam satu objek JSON • Siap headless CMS',
   },
 ];
 
@@ -314,6 +327,32 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
+  /** What a JSON package falls back to when a run predates these metadata fields. */
+  const packageExtras = useMemo(
+    () => ({
+      categoryFallback: profile.niche,
+      keywordFallback: (article.secondaryKeywords ?? '')
+        .split(',')
+        .map((word) => word.trim())
+        .filter(Boolean),
+    }),
+    [profile.niche, article.secondaryKeywords]
+  );
+
+  /**
+   * Re-derive the JSON packages after a write. A package projects the metadata
+   * plus one language's body, so editing either has to rebuild it rather than
+   * leave a stale copy shipping the old title. The exception is a write that
+   * targets a package itself: what the reader put there is what it holds.
+   */
+  const refreshPackages = useCallback(
+    (formats: FormatsBundle, metadata: SeoMetadata, writtenFormat?: OutputFormatId) =>
+      writtenFormat && isJsonFormat(writtenFormat)
+        ? formats
+        : syncJsonFormats(formats, metadata, article.generatedAt, packageExtras),
+    [article.generatedAt, packageExtras]
+  );
+
   /**
    * The HTML stored for a format, repaired when a clean render came back
    * truncated. Memoised because it is derived work, not a value.
@@ -322,6 +361,8 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
     // Articles generated before the shell rules existed still carry the grey page
     // background and the width cap. They are normalized on the way in, so opening
     // one shows and edits the corrected document rather than the old artefact.
+    // The JSON package is data rather than markup, so it passes through untouched.
+    if (isJsonFormat(selectedFormat)) return article.formats[selectedFormat] || '';
     const content = normalizeRenderedHtml(article.formats[selectedFormat] || '');
 
     if (selectedFormat === 'clean-en' || selectedFormat === 'clean-id') {
@@ -360,25 +401,30 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
   draftRef.current = draft;
 
   // Re-seed the buffer when the reader switches format or article, but never
-  // while they are typing in the one they are on.
+  // while they are typing in the one they are on. A package cannot be typed in,
+  // so it mirrors the projection instead: a metadata or HTML edit rebuilds it.
   useEffect(() => {
     setDraft(storedContent);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedFormat, article.id]);
+  }, [selectedFormat, article.id, isJsonFormat(selectedFormat) ? storedContent : undefined]);
 
   const commitRef = useRef<number | null>(null);
   const persistDraft = useCallback(
     (format: OutputFormatId, content: string) => {
       onUpdateArticle({
         ...article,
-        formats: { ...article.formats, [format]: content },
+        formats: refreshPackages(
+          { ...article.formats, [format]: content },
+          article.seoMetadata,
+          format
+        ),
         // The top-level mirrors name their own language; they are not a fallback
         // for the other one.
         ...(format === 'inline-en' ? { inlineCssHtml: content } : {}),
         ...(format === 'clean-en' ? { cleanHtml: content } : {}),
       });
     },
-    [article, onUpdateArticle]
+    [article, onUpdateArticle, refreshPackages]
   );
 
   /** Debounced write of the buffer to the article, so scoring and export see edits. */
@@ -411,6 +457,14 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
 
   const currentContent = draft;
 
+  /**
+   * The JSON package holds the article body as data, so the preview, the measured
+   * checks and the plain-text copy read the body out of it instead of scoring a
+   * blob of JSON as markup.
+   */
+  const isPackage = isJsonFormat(selectedFormat);
+  const htmlContent = isPackage ? jsonPackageBody(draft) : draft;
+
   // Updater for the current format content. Writes immediately, because these
   // are deliberate edits (a toolbar insert, prettify, an AI repair) rather than
   // keystrokes.
@@ -427,7 +481,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
       const doc = iframeRef.current.contentDocument || iframeRef.current.contentWindow?.document;
       if (doc) {
         doc.open();
-        const content = draft;
+        const content = htmlContent;
         const fullDoc = content.includes('<!DOCTYPE html>')
           ? content
           : `<!DOCTYPE html>
@@ -450,7 +504,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
         doc.close();
       }
     }
-  }, [draft, selectedFormat]);
+  }, [htmlContent, selectedFormat]);
 
   // Insert HTML Tag at cursor / wrap selected text in code editor
   const insertHtmlTag = (tagOpen: string, tagClose: string = '', defaultPlaceholder: string = '') => {
@@ -499,7 +553,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
 
   // Copy plain text of active format
   const handleCopyCleanText = async () => {
-    const stripped = currentContent
+    const stripped = htmlContent
       .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
       .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
       .replace(/<[^>]+>/g, ' ')
@@ -513,8 +567,11 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
   // Export active format HTML file
   const handleDownloadFile = () => {
     const slug = metaDraft.urlSlug || 'commercial-fitness-article';
-    const filename = `${slug}-${selectedFormat}.html`;
-    downloadFile(filename, currentContent, 'text/html;charset=utf-8');
+    downloadFile(
+      `${slug}-${selectedFormat}.${isPackage ? 'json' : 'html'}`,
+      currentContent,
+      isPackage ? 'application/json;charset=utf-8' : 'text/html;charset=utf-8'
+    );
     showCopyFeedback('download');
   };
 
@@ -610,12 +667,13 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
       onUpdateArticle({
         ...article,
         seoMetadata: metadata,
+        formats: refreshPackages(article.formats, metadata),
         focusKeyphrase: metadata.focusKeyphrase || article.focusKeyphrase,
         seoMetadataEn: article.seoMetadataEn,
         seoMetadataId: article.seoMetadataId,
       });
     },
-    [article, onUpdateArticle]
+    [article, onUpdateArticle, refreshPackages]
   );
 
   const handleMetaChange = (patch: Partial<SeoMetadata>) => {
@@ -656,7 +714,12 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
     const next = appendMetadataVersion(metadataVersions, metaDraft, {
       label: label ?? (versionLabel.trim() ? versionLabel : undefined),
     });
-    onUpdateArticle({ ...article, seoMetadata: metaDraft, metadataVersions: next });
+    onUpdateArticle({
+      ...article,
+      seoMetadata: metaDraft,
+      formats: refreshPackages(article.formats, metaDraft),
+      metadataVersions: next,
+    });
     setRestoredFrom(null);
     setVersionLabel('');
     showCopyFeedback('metaVersion');
@@ -669,6 +732,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
     onUpdateArticle({
       ...article,
       seoMetadata: restored.metadata,
+      formats: refreshPackages(article.formats, restored.metadata),
       focusKeyphrase: restored.metadata.focusKeyphrase || article.focusKeyphrase,
       seoMetadataEn: article.seoMetadataEn,
       seoMetadataId: article.seoMetadataId,
@@ -713,7 +777,11 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
     });
     onUpdateArticle({
       ...article,
-      formats: { ...article.formats, [selectedFormat]: html },
+      formats: refreshPackages(
+        { ...article.formats, [selectedFormat]: html },
+        article.seoMetadata,
+        selectedFormat
+      ),
       ...(selectedFormat === 'inline-en' ? { inlineCssHtml: html } : {}),
       ...(selectedFormat === 'clean-en' ? { cleanHtml: html } : {}),
       contentVersions: next,
@@ -752,7 +820,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
 
     onUpdateArticle({
       ...article,
-      formats,
+      formats: refreshPackages(formats, article.seoMetadata, restored.format),
       ...mirrorPatch,
       contentVersions: restored.versions,
     });
@@ -771,18 +839,18 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
   const liveScore = useMemo(
     () =>
       scoreHtml(
-        draft,
+        htmlContent,
         metaDraft,
         metaDraft.focusKeyphrase,
         article.targetWordCount,
         selectedFormat.endsWith('-id') ? 'id' : 'en'
       ),
-    [draft, metaDraft, article.targetWordCount, selectedFormat]
+    [htmlContent, metaDraft, article.targetWordCount, selectedFormat]
   );
 
   // Calculate live stats of current format
   const currentFormatStats = useMemo(() => {
-    const content = draft ?? '';
+    const content = htmlContent ?? '';
     const stripped = content
       .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
       .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
@@ -792,7 +860,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
     const chars = content.length;
     const readMins = Math.max(1, Math.ceil(words / 200));
     return { words, chars, readMins };
-  }, [draft]);
+  }, [htmlContent]);
 
   const activeFormatMeta = FORMAT_OPTIONS.find((f) => f.id === selectedFormat) || FORMAT_OPTIONS[0];
 
@@ -1025,7 +1093,8 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
 
           {/* Quick Actions: AI Improve, Copy Code, Copy Text, Export */}
           <div className="flex items-center flex-wrap gap-2">
-            {/* AI Improve Trigger Button */}
+            {/* AI Improve Trigger Button — it repairs markup, so a package has nothing for it to do */}
+            {!isPackage && (
             <button
               onClick={() => setShowImproveDrawer((prev) => !prev)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
@@ -1038,6 +1107,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
               <Sparkles className="w-3.5 h-3.5 text-amber-400" />
               <span>Improve with AI</span>
             </button>
+            )}
 
             {/* Undo button if available */}
             {undoStack.length > 0 && (
@@ -1093,7 +1163,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
             <button
               onClick={handleDownloadFile}
               className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 text-xs font-medium transition-colors"
-              title="Export HTML file (⌘S)"
+              title={`Export ${isPackage ? 'JSON' : 'HTML'} file (⌘S)`}
             >
               <Download className="w-3.5 h-3.5 text-zinc-400" />
               <span>Export</span>
@@ -1102,7 +1172,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
         </div>
 
         {/* AI Improvement Drawer */}
-        {showImproveDrawer && (
+        {!isPackage && showImproveDrawer && (
           <div className="bg-zinc-950 border-b border-zinc-800 p-4 space-y-3 animate-in fade-in slide-in-from-top-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1247,7 +1317,8 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
           </div>
         )}
 
-        {/* HTML Editing Toolbar ("full capability of html editing formats and tags") */}
+        {/* HTML Editing Toolbar — tags and prettify are meaningless inside a JSON package */}
+        {!isPackage && (
         <div className="bg-zinc-950/90 border-b border-zinc-800/80 px-3 sm:px-4 py-2 flex flex-wrap items-center justify-between gap-2 text-xs select-none">
           <div className="flex items-center flex-wrap gap-1">
             <span className="text-[11px] font-mono uppercase text-zinc-400 font-semibold mr-1">
@@ -1439,6 +1510,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
             <span>Prettify</span>
           </button>
         </div>
+        )}
 
         {/* TWO SEPARATED PANELS: CODE ON LEFT, LIVE PREVIEW ON RIGHT */}
         <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-zinc-800 bg-zinc-950 min-h-[640px]">
@@ -1448,10 +1520,15 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
               <div className="flex items-center gap-2">
                 <Code2 className="w-3.5 h-3.5 text-zinc-400" />
                 <span className="font-semibold text-zinc-200 uppercase tracking-wide">
-                  HTML Source Code Editor
+                  {isPackage ? 'JSON Package' : 'HTML Source Code Editor'}
                 </span>
                 <span className="text-zinc-500">•</span>
                 <span className="text-zinc-400">{activeFormatMeta.name}</span>
+                {isPackage && (
+                  <span className="text-zinc-500" title="Assembled from the SEO metadata and this language's HTML">
+                    derived — edit the metadata or the HTML
+                  </span>
+                )}
               </div><div className="flex items-center gap-2">
                 <span className="px-1.5 py-0.5 rounded bg-zinc-950 border border-zinc-800 text-zinc-300">
                   {currentFormatStats.words} w
@@ -1475,6 +1552,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
               <textarea
                 ref={codeEditorRef}
                 value={draft}
+                readOnly={isPackage}
                 onChange={(e) => handleDraftChange(e.target.value)}
                 onKeyDown={(e) => {
                   // Tab indents the current line, and indents every line of a
@@ -1680,7 +1758,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
           {/* TAB 1: FLESCH READABILITY CALCULATOR */}
           {bottomTab === 'flesch' && (
             <ReadabilityScorecard
-              content={currentContent}
+              content={htmlContent}
               language={selectedFormat.endsWith('-id') ? 'id' : 'en'}
               onLanguageChange={(newLang) => {
                 if (newLang === 'id' && !selectedFormat.endsWith('-id')) {
@@ -1697,7 +1775,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
           {/* TAB 2: SEO CHECKLIST */}
           {bottomTab === 'checklist' && (
             <SeoChecklistPanel
-              htmlContent={currentContent}
+              htmlContent={htmlContent}
               metadata={metaDraft}
               focusKeyphraseInput={metaDraft.focusKeyphrase}
             />
@@ -1717,7 +1795,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                 </div>
                 <button
                   onClick={async () => {
-                    const metaText = `SEO Title: ${metaDraft.seoTitle}\nHeadline: ${metaDraft.headline}\nFocus Keyphrase: ${metaDraft.focusKeyphrase}\nMeta Description: ${metaDraft.metaDescription}\nURL Slug: ${metaDraft.urlSlug}\nTags: ${metaDraft.tags.join(', ')}`;
+                    const metaText = `SEO Title: ${metaDraft.seoTitle}\nHeadline: ${metaDraft.headline}\nFocus Keyphrase: ${metaDraft.focusKeyphrase}\nMeta Description: ${metaDraft.metaDescription}\nURL Slug: ${metaDraft.urlSlug}\nTags: ${metaDraft.tags.join(', ')}\nCategory: ${metaDraft.category ?? ''}\nExcerpt: ${metaDraft.excerpt ?? ''}\nKeywords: ${(metaDraft.keywords ?? []).join(', ')}`;
                     await copyToClipboard(metaText);
                     showCopyFeedback('seoAll');
                   }}
@@ -2142,6 +2220,107 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                     value={metaDraft.metaDescription}
                     onChange={(e) => handleMetaChange({ metaDescription: e.target.value })}
                     rows={2}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-sm text-zinc-100 leading-relaxed outline-none"
+                  />
+                </div>
+
+                {/* Content Category — the JSON package's section label */}
+                <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-3.5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-mono uppercase text-zinc-400">Category</span>
+                    <button
+                      onClick={() => {
+                        copyToClipboard(metaDraft.category ?? '');
+                        showCopyFeedback('category');
+                      }}
+                      className="p-1 hover:bg-zinc-800 rounded text-zinc-400 hover:text-zinc-200"
+                    >
+                      {copiedKey === 'category' ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    value={metaDraft.category ?? ''}
+                    onChange={(e) => handleMetaChange({ category: e.target.value })}
+                    placeholder="Gym Planning"
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-sm text-zinc-100"
+                  />
+                </div>
+
+                {/* Search Keywords */}
+                <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-3.5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-mono uppercase text-zinc-400">Keywords</span>
+                    <button
+                      onClick={() => {
+                        copyToClipboard((metaDraft.keywords ?? []).join(', '));
+                        showCopyFeedback('keywords');
+                      }}
+                      className="p-1 hover:bg-zinc-800 rounded text-zinc-400 hover:text-zinc-200"
+                    >
+                      {copiedKey === 'keywords' ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {(metaDraft.keywords ?? []).map((keyword, i) => (
+                      <span
+                        key={i}
+                        className="text-xs px-2.5 py-1 rounded bg-zinc-950 border border-zinc-800 text-zinc-300 font-mono"
+                      >
+                        {keyword}
+                      </span>
+                    ))}
+                    {(metaDraft.keywords ?? []).length === 0 && (
+                      <span className="text-[11px] text-zinc-500">
+                        None yet — the focus keyphrase and the brief&apos;s secondary keywords are
+                        used instead.
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Excerpt */}
+                <div className="md:col-span-2 bg-zinc-900/60 border border-zinc-800 rounded-lg p-3.5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-mono uppercase text-zinc-400">
+                      Excerpt (Max 160 chars)
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`text-[10px] font-mono ${
+                          (metaDraft.excerpt ?? '').length > 160 ? 'text-amber-400' : 'text-zinc-400'
+                        }`}
+                      >
+                        {(metaDraft.excerpt ?? '').length}/160
+                      </span>
+                      <button
+                        onClick={() => {
+                          copyToClipboard(metaDraft.excerpt ?? '');
+                          showCopyFeedback('excerpt');
+                        }}
+                        className="p-1 hover:bg-zinc-800 rounded text-zinc-400 hover:text-zinc-200"
+                      >
+                        {copiedKey === 'excerpt' ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                  <textarea
+                    value={metaDraft.excerpt ?? ''}
+                    onChange={(e) => handleMetaChange({ excerpt: e.target.value })}
+                    rows={2}
+                    placeholder="Empty excerpt falls back to the meta description."
                     className="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-sm text-zinc-100 leading-relaxed outline-none"
                   />
                 </div>
