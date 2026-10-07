@@ -1,0 +1,8 @@
+{
+  "name": "cms-auto-fill-extension",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test lib.test.js"
+  }
+}

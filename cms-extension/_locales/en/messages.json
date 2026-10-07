@@ -1,0 +1,107 @@
+{
+  "extName": {
+    "message": "CMS Auto Fill Metadata"
+  },
+  "extDescription": {
+    "message": "Auto fill CMS form by drag and drop of JSON/MD files"
+  },
+  "dropTitle": {
+    "message": "Drop file here"
+  },
+  "dropSubtitle": {
+    "message": "JSON or JSON + HTML/MD"
+  },
+  "browseLink": {
+    "message": "browse"
+  },
+  "dragOverTitle": {
+    "message": "Release to load"
+  },
+  "langToggleTitle": {
+    "message": "Language"
+  },
+  "previewHeading": {
+    "message": "Ready to fill"
+  },
+  "previewFieldCount": {
+    "message": "$READY$ of $TOTAL$ fields ready",
+    "placeholders": {
+      "ready": { "content": "$1" },
+      "total": { "content": "$2" }
+    }
+  },
+  "previewCompanionNote": {
+    "message": "Body comes from: $NAME$",
+    "placeholders": { "name": { "content": "$1" } }
+  },
+  "groupMain": { "message": "Main form (English)" },
+  "groupIndonesian": { "message": "Bahasa Indonesia section" },
+  "dualFillNote": { "message": "English file fills the main form; Indonesian file ticks \"Add Indonesian\" and fills its section." },
+  "validationHeading": {
+    "message": "Check before filling"
+  },
+  "fillButton": {
+    "message": "Fill form"
+  },
+  "cancelButton": {
+    "message": "Cancel"
+  },
+  "reportHeading": {
+    "message": "Fill report"
+  },
+  "reportAllOk": {
+    "message": "All listed fields were filled."
+  },
+  "reportDone": {
+    "message": "Done"
+  },
+  "fieldTitle": { "message": "Title" },
+  "fieldSlug": { "message": "URL Slug" },
+  "fieldCategory": { "message": "Category" },
+  "fieldDate": { "message": "Publish Date" },
+  "fieldExcerpt": { "message": "Excerpt" },
+  "fieldTags": { "message": "Tags" },
+  "fieldKeywords": { "message": "SEO Keywords" },
+  "fieldMeta": { "message": "Meta Description" },
+  "fieldBody": { "message": "Article Body" },
+  "statusReady": { "message": "Ready" },
+  "statusMissing": { "message": "Missing" },
+  "statusWarning": { "message": "Check" },
+  "statusFilled": { "message": "Filled" },
+  "statusSkipped": { "message": "Skipped" },
+  "statusFailed": { "message": "Failed" },
+  "issueMissingTitle": { "message": "Title is required" },
+  "issueMissingSlug": { "message": "Slug is required" },
+  "issueMissingExcerpt": { "message": "Excerpt is required" },
+  "issueBadDate": { "message": "Date should look like YYYY-MM-DD" },
+  "issueBadSlug": { "message": "Slug should use lowercase letters, numbers and hyphens" },
+  "reasonCategoryUnknown": {
+    "message": "Category \"$CATEGORY$\" is not recognized",
+    "placeholders": { "category": { "content": "$1" } }
+  },
+  "reasonBodyEditor": {
+    "message": "Article body editor not found: $WHAT$",
+    "placeholders": { "what": { "content": "$1" } }
+  },
+  "reasonFieldMissing": {
+    "message": "Field not found on this page: $WHAT$",
+    "placeholders": { "what": { "content": "$1" } }
+  },
+  "reasonNoValue": { "message": "No value in the JSON file" },
+  "reasonEmptyList": { "message": "List is empty" },
+  "reasonIdCheckbox": { "message": "\"Add Indonesian\" checkbox not found on this page" },
+  "toastJsonInvalid": {
+    "message": "Invalid JSON: $ERROR$",
+    "placeholders": { "error": { "content": "$1" } }
+  },
+  "toastNoFiles": { "message": "No usable file detected" },
+  "toastMdConverted": { "message": "Markdown converted to HTML" },
+  "popupHeading": { "message": "CMS Auto Fill" },
+  "popupEnableSite": { "message": "Show widget on this site" },
+  "popupDisableSite": { "message": "Hide widget on this site" },
+  "popupSitesHeading": { "message": "Widget is shown on" },
+  "popupAddPlaceholder": { "message": "example.com" },
+  "popupAddButton": { "message": "Add" },
+  "popupRemoveLabel": { "message": "Remove" },
+  "popupDefaultNote": { "message": "The widget appears automatically on admin-realleader sites. Other sites can be added here." }
+}

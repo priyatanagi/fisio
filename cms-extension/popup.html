@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      width: 300px;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13.5px;
+      color: #1f2430;
+      background: #fff;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 14px;
+      border-bottom: 1px solid #f1f2f4;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    .lang-toggle {
+      margin-left: auto;
+      display: inline-flex;
+      background: #f3f4f6;
+      border: 1px solid #e5e7eb;
+      border-radius: 999px;
+      padding: 2px;
+      gap: 2px;
+    }
+    .lang-btn {
+      border: 0;
+      background: transparent;
+      border-radius: 999px;
+      font: inherit;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: #6b7280;
+      padding: 3px 8px;
+      cursor: pointer;
+    }
+    .lang-btn.is-active { background: #e62129; color: #fff; }
+    main { padding: 14px; }
+    .site-toggle {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 11px;
+      background: #f8f9fb;
+      border: 1px solid #eceef1;
+      border-radius: 12px;
+      cursor: pointer;
+    }
+    .site-toggle input { accent-color: #e62129; width: 16px; height: 16px; cursor: pointer; }
+    .site-toggle span { font-weight: 600; font-size: 13px; }
+    .site-host {
+      margin-top: 6px;
+      font-size: 11.5px;
+      color: #6b7280;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    h2 {
+      margin: 14px 0 7px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #6b7280;
+    }
+    ul { list-style: none; margin: 0; padding: 0; }
+    li {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border: 1px solid #eceef1;
+      border-radius: 10px;
+      margin-bottom: 6px;
+      font-size: 12.5px;
+    }
+    li .host { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    li button {
+      border: 1px solid #e5e7eb;
+      background: #fff;
+      border-radius: 7px;
+      font: inherit;
+      font-size: 11px;
+      color: #6b7280;
+      padding: 3px 8px;
+      cursor: pointer;
+    }
+    li button:hover { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
+    .add-row { display: flex; gap: 6px; }
+    .add-row input {
+      flex: 1;
+      min-width: 0;
+      font: inherit;
+      font-size: 12.5px;
+      padding: 7px 10px;
+      border: 1px solid #e5e7eb;
+      border-radius: 9px;
+      outline: none;
+    }
+    .add-row input:focus { border-color: rgba(230, 33, 41, 0.5); box-shadow: 0 0 0 3px rgba(230, 33, 41, 0.12); }
+    .add-row button {
+      border: 1px solid #e62129;
+      background: #e62129;
+      color: #fff;
+      border-radius: 9px;
+      font: inherit;
+      font-size: 12.5px;
+      font-weight: 700;
+      padding: 7px 12px;
+      cursor: pointer;
+    }
+    .note {
+      margin-top: 12px;
+      font-size: 11.5px;
+      line-height: 1.5;
+      color: #6b7280;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="heading">CMS Auto Fill</h1>
+    <div class="lang-toggle" role="group">
+      <button class="lang-btn" data-lang="en" type="button">EN</button>
+      <button class="lang-btn" data-lang="id" type="button">ID</button>
+    </div>
+  </header>
+  <main>
+    <label class="site-toggle">
+      <input type="checkbox" id="siteToggle">
+      <span id="siteToggleLabel">Show widget on this site</span>
+    </label>
+    <div class="site-host" id="siteHost"></div>
+
+    <h2 id="sitesHeading">Widget is shown on</h2>
+    <ul id="sitesList"></ul>
+
+    <div class="add-row">
+      <input type="text" id="siteInput" autocomplete="off">
+      <button type="button" id="siteAdd">Add</button>
+    </div>
+
+    <p class="note" id="note"></p>
+  </main>
+  <script src="i18n.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

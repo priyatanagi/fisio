@@ -1,0 +1,107 @@
+{
+  "extName": {
+    "message": "CMS Auto Fill Metadata"
+  },
+  "extDescription": {
+    "message": "Isi otomatis form CMS lewat drag and drop file JSON/MD"
+  },
+  "dropTitle": {
+    "message": "Drop File di Sini"
+  },
+  "dropSubtitle": {
+    "message": "JSON atau JSON + HTML/MD"
+  },
+  "browseLink": {
+    "message": "pilih file"
+  },
+  "dragOverTitle": {
+    "message": "Lepaskan untuk memuat"
+  },
+  "langToggleTitle": {
+    "message": "Bahasa"
+  },
+  "previewHeading": {
+    "message": "Siap mengisi"
+  },
+  "previewFieldCount": {
+    "message": "$READY$ dari $TOTAL$ field siap",
+    "placeholders": {
+      "ready": { "content": "$1" },
+      "total": { "content": "$2" }
+    }
+  },
+  "previewCompanionNote": {
+    "message": "Body berasal dari: $NAME$",
+    "placeholders": { "name": { "content": "$1" } }
+  },
+  "groupMain": { "message": "Form utama (Inggris)" },
+  "groupIndonesian": { "message": "Section Bahasa Indonesia" },
+  "dualFillNote": { "message": "File Inggris mengisi form utama; file Indonesia mencentang \"Add Indonesian\" lalu mengisi section-nya." },
+  "validationHeading": {
+    "message": "Cek dulu sebelum mengisi"
+  },
+  "fillButton": {
+    "message": "Isi Form"
+  },
+  "cancelButton": {
+    "message": "Batal"
+  },
+  "reportHeading": {
+    "message": "Laporan pengisian"
+  },
+  "reportAllOk": {
+    "message": "Semua field di atas berhasil diisi."
+  },
+  "reportDone": {
+    "message": "Selesai"
+  },
+  "fieldTitle": { "message": "Judul" },
+  "fieldSlug": { "message": "URL Slug" },
+  "fieldCategory": { "message": "Kategori" },
+  "fieldDate": { "message": "Tanggal Terbit" },
+  "fieldExcerpt": { "message": "Ringkasan" },
+  "fieldTags": { "message": "Tag" },
+  "fieldKeywords": { "message": "Kata Kunci SEO" },
+  "fieldMeta": { "message": "Deskripsi Meta" },
+  "fieldBody": { "message": "Isi Artikel" },
+  "statusReady": { "message": "Siap" },
+  "statusMissing": { "message": "Kosong" },
+  "statusWarning": { "message": "Periksa" },
+  "statusFilled": { "message": "Terisi" },
+  "statusSkipped": { "message": "Dilewati" },
+  "statusFailed": { "message": "Gagal" },
+  "issueMissingTitle": { "message": "Judul wajib diisi" },
+  "issueMissingSlug": { "message": "Slug wajib diisi" },
+  "issueMissingExcerpt": { "message": "Ringkasan wajib diisi" },
+  "issueBadDate": { "message": "Tanggal harus berformat YYYY-MM-DD" },
+  "issueBadSlug": { "message": "Slug sebaiknya huruf kecil, angka, dan tanda hubung" },
+  "reasonCategoryUnknown": {
+    "message": "Kategori \"$CATEGORY$\" tidak dikenali",
+    "placeholders": { "category": { "content": "$1" } }
+  },
+  "reasonBodyEditor": {
+    "message": "Editor isi artikel tidak ditemukan: $WHAT$",
+    "placeholders": { "what": { "content": "$1" } }
+  },
+  "reasonFieldMissing": {
+    "message": "Field tidak ditemukan di halaman ini: $WHAT$",
+    "placeholders": { "what": { "content": "$1" } }
+  },
+  "reasonNoValue": { "message": "Tidak ada nilai di file JSON" },
+  "reasonEmptyList": { "message": "Daftar kosong" },
+  "reasonIdCheckbox": { "message": "Checkbox \"Add Indonesian\" tidak ditemukan di halaman ini" },
+  "toastJsonInvalid": {
+    "message": "JSON tidak valid: $ERROR$",
+    "placeholders": { "error": { "content": "$1" } }
+  },
+  "toastNoFiles": { "message": "Tidak ada file yang terdeteksi" },
+  "toastMdConverted": { "message": "Markdown dikonversi ke HTML" },
+  "popupHeading": { "message": "CMS Auto Fill" },
+  "popupEnableSite": { "message": "Tampilkan widget di situs ini" },
+  "popupDisableSite": { "message": "Sembunyikan widget di situs ini" },
+  "popupSitesHeading": { "message": "Widget ditampilkan di" },
+  "popupAddPlaceholder": { "message": "contoh.com" },
+  "popupAddButton": { "message": "Tambah" },
+  "popupRemoveLabel": { "message": "Hapus" },
+  "popupDefaultNote": { "message": "Widget otomatis muncul di situs admin-realleader. Situs lain bisa ditambahkan di sini." }
+}
