@@ -1,9 +1,9 @@
-import { json } from './_shared';
+import { sendJson } from './_shared';
 
 // pid/port/instance from the local Express health route are meaningless per
 // request here, so the serverless answer stays minimal.
-export default function handler(req: Request): Response {
-  return json({
+export default async function handler(_req: unknown, res: import('./_shared').NodeRes) {
+  sendJson(res, 200, {
     status: 'ok',
     app: 'Fisio Architect',
     hasKey: Boolean(process.env.GEMINI_API_KEY),

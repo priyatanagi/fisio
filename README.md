@@ -394,6 +394,13 @@ The repository deploys as-is (Option A: native serverless functions, no Express 
    `GEMINI_API_KEY` and any `OPENAI_*` / `ANTHROPIC_*` fallbacks you want. All are optional —
    per-role keys typed in the Providers view work without any dashboard config, as does an
    Ollama-only setup (zero cloud keys). Do **not** set `PORT` or `DISABLE_HMR`.
+   For the optional cloud storage, the two variables must be named exactly
+   `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`: Vite only exposes the `VITE_` prefix, so the
+   `NEXT_PUBLIC_*` names that Supabase's own snippet uses are invisible to this app. They also have
+   to be stored as **non-sensitive** values — Vercel withholds sensitive variables from the build,
+   and Vite reads them *at build time*, which is what produces a bundle whose config is empty.
+   After changing any variable, deploy again; an existing deployment keeps the values it was built
+   with.
 3. Deploy. `api/*.ts` become `/api/*` automatically; `vercel.json` rewrites everything except
    `/api/` to `index.html` for the SPA.
 
@@ -401,6 +408,21 @@ The repository deploys as-is (Option A: native serverless functions, no Express 
 Request/Response adapters over the same handler cores as the Express app
 (`src/server/handlers.ts`), so validation, messages and the NDJSON stream are identical on both
 platforms. `npm run dev` / `npm start` keep using Express + Vite middleware locally.
+
+**Why `api/package.json`, `src/package.json` and two extra tsconfigs exist.** The root package is
+`"type": "module"`, so Vercel compiles every function — and the `src/` files they import — as ES
+modules. Node's ESM resolver refuses extensionless relative imports (`./handlers`), while the whole
+codebase is written that way because tsx and Vite both allow it. Rather than append `.js` to every
+import forever, the function graph is scoped to CommonJS instead: `api/` and `src/` each declare
+`"type": "commonjs"` with a matching tsconfig that sets `module: commonjs`. The browser build is
+unaffected — Vite bundles the `.ts` sources, never the compiled output. If a function starts failing
+with `ERR_MODULE_NOT_FOUND` or `ERR_REQUIRE_ESM`, these four files are the first place to look.
+
+One more tsconfig rule worth knowing: the root `tsconfig.json` must NOT list `"types"`. A forced
+entry (it used to be `vite/client`) is applied to every compilation unit, including the Vercel
+function build, whose sandbox cannot resolve that package — TS2688 there took down all four
+endpoints. Vite's client types come from `src/vite-env.d.ts` instead, which only the browser graph
+reads.
 
 Caveats of the serverless target:
 

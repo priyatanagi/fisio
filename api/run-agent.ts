@@ -1,52 +1,38 @@
-import { AgentRunError, parseRunAgentRequest, runAgentStream } from '../src/server/handlers';
+import {
+  AgentRunError,
+  parseRunAgentRequest,
+  runAgentStream,
+} from '../src/server/handlers';
 import { callProvider } from '../src/server/providers';
 import { callOllamaChunked } from '../src/server/providers/ollama';
-import { json, readJsonBody } from './_shared';
+import { bodyOf, sendJson, type NodeRes } from './_shared';
 
-// A single generation can outlive the default 10s function budget; vercel.json
-// raises maxDuration to the Hobby ceiling.
-export default async function handler(req: Request): Promise<Response> {
+export default async function handler(req: { body?: unknown }, res: NodeRes): Promise<void> {
   let request;
   try {
-    request = parseRunAgentRequest(await readJsonBody(req));
+    request = parseRunAgentRequest(bodyOf(req));
   } catch (error) {
+    // Nothing has executed yet, so a request-shape problem is a plain JSON 400.
     const err =
       error instanceof AgentRunError
         ? error
         : new AgentRunError('Invalid run request', false, 400);
-    return json({ ok: false, error: err.message }, err.status);
+    return sendJson(res, err.status, { ok: false, error: err.message });
   }
 
-  const encoder = new TextEncoder();
-  let safeWrite: (chunk: string) => void = () => {};
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      safeWrite = (line: string) => {
-        try {
-          controller.enqueue(encoder.encode(line));
-        } catch {
-          // Client disconnected mid-run; the provider call finishes and the
-          // remaining lines are dropped.
-        }
-      };
-      void runAgentStream(request, { callProvider, callOllamaChunked }, safeWrite)
-        .catch(() => {})
-        .finally(() => {
-          try {
-            controller.close();
-          } catch {
-            // Already errored/closed — nothing further to do.
-          }
-        });
-    },
-  });
+  res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store, must-revalidate');
+  // Ask the platform's proxy not to buffer, or the events arrive only at the end.
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.status(200);
 
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'application/x-ndjson; charset=utf-8',
-      'Cache-Control': 'no-store, must-revalidate',
-      // Nginx on the platform buffers by default; ask it not to.
-      'X-Accel-Buffering': 'no',
-    },
+  await runAgentStream(request, { callProvider, callOllamaChunked }, (line) => {
+    try {
+      res.write(line);
+    } catch {
+      // Client went away mid-run; the provider call finishes and the remaining
+      // lines are dropped.
+    }
   });
+  res.end();
 }
