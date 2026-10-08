@@ -60,7 +60,8 @@ including **free local inference via Ollama**.
 | AI SDKs | `@google/genai` (server-only, never bundled to the browser) + plain `fetch` (OpenAI / Anthropic / Ollama) |
 | Persistence | Hand-rolled IndexedDB layer (`src/db`, v2), `localStorage` |
 | Export | `jszip` |
-| Tests | Vitest (573 tests / 41 files), `fake-indexeddb` |
+| Tests | Vitest (655 tests / 47 files), `fake-indexeddb` |
+| Cloud (optional) | Supabase PostgREST through plain `fetch` — no SDK, so the bundle stays small |
 
 TypeScript is checked with `tsc --noEmit` (the `lint` script). No separate linter is configured.
 
@@ -110,6 +111,7 @@ fallbacks/defaults** — per-role provider settings live in the Providers view (
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` | Same fallback pattern for Anthropic. |
 | `PORT` | Express listen port; defaults to `5177` with automatic fallback. Local/self-host only. |
 | `DISABLE_HMR` | Set to `true` to disable Vite HMR/file watching (used by hosted editors). Local dev only. |
+| `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` | Optional cloud storage. **Public by design** — they are in the bundle. See [Cloud sync with Supabase](#cloud-sync-with-supabase-optional). |
 
 Ollama has **no server-side variables**: its base URL and model are configured per role in the
 Providers view, because the browser — not the server — talks to your local Ollama.
@@ -259,10 +261,83 @@ CSV columns: `Topic_Idea`, `Focus_Keyphrase`, `Target_Length`, `Tone_Override`.
   modal (`fitseo_system_prompt`, `fitseo_negative_prompt`).
 - History updates in place (`upsertArticle`, `src/app/articleList.ts`) so new saves appear without
   a reload.
+- **Optional cloud copy**: articles, their version history and the rules can be mirrored to your own
+  Supabase project — see [Cloud sync with Supabase](#cloud-sync-with-supabase-optional). IndexedDB
+  stays the working store either way; the cloud never becomes a requirement to keep generating.
 
 The live preview runs in an iframe sandboxed as `allow-scripts allow-popups allow-forms` — it
 deliberately omits `allow-same-origin`, so agent-generated HTML gets an opaque origin and cannot
 read the app's `localStorage`, cookies, or IndexedDB.
+
+---
+
+## Cloud sync with Supabase (optional)
+
+Off by default and inert until configured: with no `VITE_SUPABASE_*` values the app behaves exactly
+as it did before, entirely local.
+
+**What is stored**
+
+* Each generated article as one JSONB row — including the full `contentVersions` and
+  `metadataVersions` history, metrics, score, review report and the profile snapshot it was built
+  from.
+* One settings document per workspace: the brand profile with its **design tokens**, `exclusions`
+  and per-format overrides, the universal writing/SEO rules, and the pipeline config. This is what
+  makes "aturan profile" identical on every device.
+* Not stored: provider selections and API keys (they stay in this browser), the run journal and
+  batch job state (local-only, they are transient).
+
+**Setup**
+
+1. Create a Supabase project, then run [`supabase/schema.sql`](supabase/schema.sql) once in
+   Project Settings → SQL Editor. It creates `fisio_articles`, `fisio_settings`, the row level
+   security policies and the `fisio_cloud_handshake()` function the Test button uses.
+2. Put the two public values in `.env` (or in Vercel's Environment Variables **before** deploying —
+   Vite inlines `VITE_*` at build time):
+   ```
+   VITE_SUPABASE_URL="https://<ref>.supabase.co"
+   VITE_SUPABASE_ANON_KEY="<anon public key>"
+   ```
+   Restart `npm run dev`.
+3. Open **Providers → Cloud storage (Supabase)** → *Generate new secret* → copy it → *Save secret*
+   → *Test connection*. The first sync uploads everything already on this device.
+4. On a second device, paste **the same secret** instead of generating one; a new secret means a new,
+   empty workspace.
+
+**Why the secret is typed, not put in the environment**
+
+The anon key is public by design and grants nothing on its own — row level security decides. The
+policies compare the request header `X-Workspace-Secret` against the `workspace_secret` column of
+each row, so that string is the only thing that opens your data. Anything in a `VITE_*` variable is
+shipped inside the browser bundle, so a workspace key placed there would be handed to every visitor;
+typing it once per device keeps it out of git, out of the build and out of the bundle. The client
+also refuses to start sync when it finds a `service_role` key (or a key shaped like one), because
+that key would bypass every policy in the schema.
+
+**Sync behaviour**
+
+* **Local-first.** IndexedDB is the store the UI reads; sync runs beside it and can never block or
+  fail a save.
+* Pull when the app finishes loading; push debounced 1.5 s after each change; drain again when the
+  browser reports it is back online. Failures retry with 2 s → 4 s → 8 s … capped at 60 s.
+* A pending queue (and the deletion tombstones) is persisted in IndexedDB `meta`, so work done
+  offline is still uploaded after a reload.
+* **Last-write-wins per article**, decided by the newest timestamp the record carries:
+  `generatedAt` or the latest saved version. On an exact tie the local copy wins.
+* **Version history is unioned, never replaced**, so a smaller cloud copy cannot shorten a local
+  editor's history.
+* An article too large for one request has its **oldest snapshots dropped from the outgoing copy
+  only** — the local record keeps all 50.
+* Deletes remove the row remotely and write a tombstone; a delete that could not reach the server is
+  retried and the next pull will not resurrect the article.
+
+| Caveat | Consequence |
+|---|---|
+| One settings row per workspace | The cloud holds one brand at a time; profiles are not multi-tenant. |
+| Timestamps come from device clocks | Skewed clocks can decide a conflict wrongly; edit times are otherwise preserved. |
+| Rows are plain JSONB | Readable in the Supabase dashboard (deliberate, so you can audit content). Not end-to-end encrypted. |
+| A brand-new workspace looks like an empty one | On a workspace with no rows yet, the Test button cannot prove the secret is right — it says "no saved data yet" instead of pretending. |
+| Payload limit ~10 MB per request | Handled by trimming outgoing snapshots; a single enormous article still may be refused. |
 
 ---
 
@@ -351,6 +426,7 @@ Provider dispatch and Gemini's rate-limit model ladder live in `src/server/provi
 server.ts                    dotenv + port fallback + Vite middleware/static + listen
 vercel.json                  Vercel build settings, maxDuration, SPA rewrite excluding /api
 api/                         Vercel functions: health, test-provider, models, run-agent (NDJSON)
+supabase/schema.sql          Tables, RLS policies and the handshake RPC for optional cloud storage
 vite.config.ts               Vite + React + Tailwind setup
 vitest.config.ts             Vitest (node environment, src/**/*.test.ts)
 
@@ -370,7 +446,13 @@ src/
                              BatchUploadTable, BatchQueueTable, HistoryTable,
                              ReadabilityScorecard, SeoChecklistPanel, UserProfileForm,
                              BrandKitPanel, DesignTokenPreview, LiveTokenTestBanner,
-                             RuleDiffPanel, ModelPicker, Header, RulesModal, ShortcutsModal
+                             RuleDiffPanel, ModelPicker, CloudSyncPanel, Header, RulesModal,
+                             ShortcutsModal
+  sync/                      cloudConfig (env + workspace secret), supabaseRest (PostgREST over
+                             fetch), syncMerge (last-write-wins + payload sanitizers),
+                             syncQueue (offline-persisted pending work), tombstones (deletes that
+                             must not be resurrected), syncEngine (pull/merge/push cycle),
+                             useCloudSync (timing only)
   pipeline/                  runArticle (+resumeArticle), runAgent (NDJSON stream reader +
                              browser-side Ollama branch), stages, seoBrief, providerApi
                              (catalog/connection test routing), scoreArticle/scoreHtml,
@@ -420,11 +502,13 @@ docs/
 
 ## Testing
 
-`npm test` runs **573 tests across 41 files** covering the pipeline cost matrix and review gate
+`npm test` runs **655 tests across 47 files** covering the pipeline cost matrix and review gate
 (with the `resumeArticle` retry/skip paths), the batch queue state machine, CSV parsing, brief
 normalization, scoring and topic fidelity, brand tokens / token CSS / contrast, export, role-schema
 validation, prompt builders, model catalog, agent events, the IndexedDB layer and its migration,
-and the hash router. `npm run lint` type-checks the whole project.
+and the hash router. The cloud layer is covered against a stand-in PostgREST (request headers,
+Range paging, upsert conflict targets, RLS rejection mapping), plus merge ordering, payload
+sanitizers, the offline queue and tombstones. `npm run lint` type-checks the whole project.
 
 ---
 

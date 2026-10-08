@@ -29,6 +29,9 @@ export function sanitizePipelineConfig(stored: unknown): PipelineConfig {
   if (!stored || typeof stored !== 'object') return { ...base };
 
   const raw = stored as Partial<Record<keyof PipelineConfig, unknown>>;
+  // An empty list is kept as-is: it is what the format picker's "Deselect All"
+  // means, and the disabled Generate button is what stops a run with nothing
+  // selected. Only a missing or non-array value falls back to the defaults.
   const targetFormats = Array.isArray(raw.targetFormats)
     ? (raw.targetFormats.filter((f) => typeof f === 'string') as PipelineConfig['targetFormats'])
     : base.targetFormats;
@@ -40,7 +43,7 @@ export function sanitizePipelineConfig(stored: unknown): PipelineConfig {
     judge: typeof raw.judge === 'boolean' ? raw.judge : base.judge,
     impower: pick(raw.impower, IMPOWER_LEVELS, base.impower),
     reviewer: pick(raw.reviewer, REVIEWER_MODES, base.reviewer),
-    targetFormats: targetFormats.length > 0 ? targetFormats : base.targetFormats,
+    targetFormats,
     languages: languages.length > 0 ? languages : base.languages,
     targetWords:
       typeof raw.targetWords === 'number' && Number.isFinite(raw.targetWords) && raw.targetWords > 0

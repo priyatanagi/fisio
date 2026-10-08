@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { runArticle } from './runArticle';
 import { putArticle, putJob } from '../db';
+import { cloudQueue } from '../sync/syncQueue';
 import type { UserProfile } from '../types/profile';
 import type { UniversalRules } from '../config/universalRules';
 import type { MultiAgentConfig } from '../types/provider';
@@ -344,6 +345,9 @@ export function useBatchQueue(options: UseBatchQueueOptions): UseBatchQueueResul
 
       if (result.status === 'done' && result.article) {
         await putArticle(result.article);
+        // Batch runs never pass through App's save handler, so the queue is
+        // notified here or the generated articles would stay local-only.
+        cloudQueue.addArticle(result.article.id);
         dispatch({
           type: 'ROW_DONE',
           rowId: row.rowId,
@@ -354,7 +358,10 @@ export function useBatchQueue(options: UseBatchQueueOptions): UseBatchQueueResul
       }
 
       if (result.status === 'needs_attention') {
-        if (result.article) await putArticle(result.article);
+        if (result.article) {
+          await putArticle(result.article);
+          cloudQueue.addArticle(result.article.id);
+        }
         dispatch({
           type: 'ROW_ATTENTION',
           rowId: row.rowId,

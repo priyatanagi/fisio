@@ -18,6 +18,16 @@ import {
   RESEARCH_KEYWORD_SEGMENTS,
 } from '../config/defaultPrompts';
 
+/** Every output format the pipeline can produce, in the order the picker shows them. */
+const ALL_FORMAT_IDS: OutputFormatId[] = [
+  'inline-en',
+  'inline-id',
+  'clean-en',
+  'clean-id',
+  'json-en',
+  'json-id',
+];
+
 interface TopicConsoleProps {
   topic: string;
   setTopic: (t: string) => void;
@@ -93,15 +103,12 @@ export const TopicConsole: React.FC<TopicConsoleProps> = ({
     }
   };
 
-  const selectAllFormats = () => {
-    setTargetFormats([
-      'inline-en',
-      'inline-id',
-      'clean-en',
-      'clean-id',
-      'json-en',
-      'json-id',
-    ]);
+  // The control is a toggle: pressing it while every format is already selected
+  // clears the selection, so reaching "all six" and back is one click either way.
+  const allFormatsSelected = ALL_FORMAT_IDS.every((id) => targetFormats.includes(id));
+
+  const toggleAllFormats = () => {
+    setTargetFormats(allFormatsSelected ? [] : [...ALL_FORMAT_IDS]);
   };
 
   const activeSegmentData = RESEARCH_KEYWORD_SEGMENTS.find((s) => s.id === selectedSegment);
@@ -296,11 +303,11 @@ export const TopicConsole: React.FC<TopicConsoleProps> = ({
           </div>
           <button
             type="button"
-            onClick={selectAllFormats}
+            onClick={toggleAllFormats}
             disabled={isGenerating}
             className="text-[11px] text-zinc-400 hover:text-zinc-200 underline font-mono"
           >
-            Select All 6 Formats
+            {allFormatsSelected ? 'Deselect All 6 Formats' : 'Select All 6 Formats'}
           </button>
         </div>
 

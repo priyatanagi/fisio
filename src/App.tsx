@@ -14,7 +14,10 @@ import { HistoryView } from './views/HistoryView';
 import { ProvidersView } from './views/ProvidersView';
 
 import { runMigration } from './db/migrate';
-import { listArticles, putArticle, deleteArticle } from './db';
+import { listArticles, putArticle } from './db';
+import { getSettingsSavedAt, setSettingsSavedAt } from './sync/cloudConfig';
+import { useCloudSync } from './sync/useCloudSync';
+import type { CloudSettings } from './sync/syncMerge';
 import type { GeneratedArticle } from './types/article';
 import type { RunRecord } from './types/run';
 import type { MultiAgentConfig } from './types/provider';
@@ -69,19 +72,53 @@ export default function App() {
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
   const [storageWarning, setStorageWarning] = useState<string | null>(null);
 
+  // Cloud sync reads lazily through these callbacks, so it always pushes what
+  // is on screen and never a snapshot from the render that started a cycle.
+  const cloud = useCloudSync({
+    ready: isDbLoaded,
+    currentSettings: () => ({
+      profile,
+      universalRules,
+      pipelineConfig,
+      updatedAt: getSettingsSavedAt(),
+    }),
+    onSettingsFromCloud: (settings: CloudSettings) => {
+      setProfile(settings.profile);
+      writeJson('fitseo_profile', settings.profile);
+      setUniversalRules(settings.universalRules);
+      writeJson('fitseo_universal_rules', settings.universalRules);
+      setPipelineConfig(settings.pipelineConfig);
+      writeJson('fitseo_pipeline_config', settings.pipelineConfig);
+    },
+    onLocalChanged: () => {
+      void listArticles()
+        .then(setArticles)
+        .catch(() => undefined);
+    },
+  });
+
+  const markSettingsChanged = () => {
+    setSettingsSavedAt(new Date().toISOString());
+    cloud.settingsChanged();
+  };
+
   const handleSaveProfile = (next: UserProfile) => {
     setProfile(next);
     writeJson('fitseo_profile', next);
+    markSettingsChanged();
   };
 
   const handleSaveMultiAgent = (next: MultiAgentConfig) => {
     setMultiAgentConfig(next);
     writeJson('fitseo_multi_agent_config', next);
+    // Provider settings — including API keys — stay in this browser. They are
+    // deliberately not part of the cloud document.
   };
 
   const handleSaveRules = (next: UniversalRules) => {
     setUniversalRules(next);
     writeJson('fitseo_universal_rules', next);
+    markSettingsChanged();
   };
 
   const handleSavePipeline = (next: PipelineConfig) => {
@@ -92,6 +129,7 @@ export default function App() {
     if (!writeJson('fitseo_pipeline_config', sanitized)) {
       setStorageWarning('Pipeline settings could not be saved to this browser, so they reset on reload.');
     }
+    markSettingsChanged();
   };
 
   useEffect(() => {
@@ -122,17 +160,26 @@ export default function App() {
     };
   }, []);
 
-  const handleDeleteArticle = useCallback(async (id: string) => {
-    await deleteArticle(id);
-    setArticles((prev) => prev.filter((a) => a.id !== id));
-  }, []);
+  const handleDeleteArticle = useCallback(
+    async (id: string) => {
+      // Removes the local record, the queued upload and the cloud row; a delete
+      // that cannot reach the server is retried by the next sync cycle.
+      await cloud.articleDeleted(id);
+      setArticles((prev) => prev.filter((a) => a.id !== id));
+    },
+    [cloud]
+  );
 
-  const handleUpdateArticle = useCallback(async (updated: GeneratedArticle) => {
-    await putArticle(updated);
-    // upsert, not map: a first-time article has no id in state yet, and map()
-    // alone dropped every new generation from History until a reload.
-    setArticles((prev) => upsertArticle(prev, updated));
-  }, []);
+  const handleUpdateArticle = useCallback(
+    async (updated: GeneratedArticle) => {
+      await putArticle(updated);
+      // upsert, not map: a first-time article has no id in state yet, and map()
+      // alone dropped every new generation from History until a reload.
+      setArticles((prev) => upsertArticle(prev, updated));
+      cloud.articleSaved(updated);
+    },
+    [cloud]
+  );
 
   // The run lives above the router so switching views cannot kill a
   // generation in progress or wipe the topic that was typed in.
@@ -212,6 +259,7 @@ export default function App() {
         <ProvidersView
           multiAgentConfig={multiAgentConfig}
           onSave={handleSaveMultiAgent}
+          cloud={cloud}
         />
       );
       break;

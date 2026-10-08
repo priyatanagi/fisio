@@ -46,8 +46,16 @@ describe('sanitizePipelineConfig', () => {
     expect(config.targetWords).toBe(DEFAULT_PIPELINE_CONFIG.targetWords);
   });
 
-  it('rejects an empty format list rather than running with nothing to render', () => {
-    expect(sanitizePipelineConfig({ targetFormats: [] }).targetFormats).toEqual(
+  // An empty selection is a real UI state now — the format picker's "Deselect
+  // All" produces it — so it must survive the round trip. Running with nothing
+  // selected is prevented where it matters: the Generate button is disabled at
+  // zero formats, so a damaged/non-array value is still repaired to defaults.
+  it('keeps an explicit empty format selection', () => {
+    expect(sanitizePipelineConfig({ targetFormats: [] }).targetFormats).toEqual([]);
+  });
+
+  it('repairs a missing or non-array format list to the defaults', () => {
+    expect(sanitizePipelineConfig({}).targetFormats).toEqual(
       DEFAULT_PIPELINE_CONFIG.targetFormats
     );
   });

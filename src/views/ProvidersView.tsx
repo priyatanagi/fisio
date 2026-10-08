@@ -5,11 +5,15 @@ import type { AgentRole, MultiAgentConfig, ProviderConfig, ProviderType } from '
 import { PROVIDER_PRESETS as PRESETS } from '../types/provider';
 import { testProviderConnection } from '../pipeline/providerApi';
 import { ModelPicker } from '../components/ModelPicker';
+import { CloudSyncPanel } from '../components/CloudSyncPanel';
+import type { CloudSyncController } from '../sync/useCloudSync';
 import { noAutofillProps, noAutofillSecretProps } from '../utils/autofillGuard';
 
 interface ProvidersViewProps {
   multiAgentConfig: MultiAgentConfig;
   onSave: (config: MultiAgentConfig) => void;
+  /** Cloud sync controller from App; the panel is hidden without it. */
+  cloud?: CloudSyncController;
 }
 
 const ROLE_INFO: Record<AgentRole, { name: string; icon: React.ReactNode; desc: string }> = {
@@ -30,7 +34,7 @@ function keyPlaceholder(provider: ProviderType): string {
   return 'Required';
 }
 
-export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, onSave }) => {
+export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, onSave, cloud }) => {
   const [activeRole, setActiveRole] = useState<AgentRole>('creator');
   const [saved, setSaved] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -254,6 +258,8 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, 
           Each field is stored per role immediately — no Apply step.
         </span>
       </div>
+
+      {cloud && <CloudSyncPanel cloud={cloud} />}
     </div>
   );
 };
