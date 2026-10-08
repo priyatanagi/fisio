@@ -51,14 +51,32 @@ export function contrastRatio(a: string, b: string): number {
   return (light + 0.05) / (dark + 0.05);
 }
 
-/** The pairings that actually carry reading text in a generated article. */
-function readingPairs(rules: DesignRules): { label: string; fg: string; bg: string; required: number }[] {
+/**
+ * The pairings that actually carry reading text in a generated article.
+ *
+ * `mutable` names the token an auto-fix is allowed to change and `fixed` the one
+ * it must not: the page background is the surface the whole kit is built on, and
+ * a button label is the background colour in inverted text — so a failing button
+ * is repaired by moving the primary, never by repainting the page.
+ */
+export interface ReadingPair {
+  label: string;
+  fg: string;
+  bg: string;
+  required: number;
+  /** Token key the repair may adjust. */
+  mutable: keyof DesignRules;
+  /** Token key the repair must leave alone. */
+  fixed: keyof DesignRules;
+}
+
+export function readingPairs(rules: DesignRules): ReadingPair[] {
   return [
-    { label: 'Body text on background', fg: rules.textColor, bg: rules.backgroundColor, required: 4.5 },
-    { label: 'Headings on background', fg: rules.secondaryColor, bg: rules.backgroundColor, required: 4.5 },
-    { label: 'Links on background', fg: rules.primaryColor, bg: rules.backgroundColor, required: 4.5 },
-    { label: 'Button label on primary', fg: rules.backgroundColor, bg: rules.primaryColor, required: 4.5 },
-    { label: 'Table header on background', fg: rules.secondaryColor, bg: rules.backgroundColor, required: 4.5 },
+    { label: 'Body text on background', fg: rules.textColor, bg: rules.backgroundColor, required: 4.5, mutable: 'textColor', fixed: 'backgroundColor' },
+    { label: 'Headings on background', fg: rules.secondaryColor, bg: rules.backgroundColor, required: 4.5, mutable: 'secondaryColor', fixed: 'backgroundColor' },
+    { label: 'Links on background', fg: rules.primaryColor, bg: rules.backgroundColor, required: 4.5, mutable: 'primaryColor', fixed: 'backgroundColor' },
+    { label: 'Button label on primary', fg: rules.backgroundColor, bg: rules.primaryColor, required: 4.5, mutable: 'primaryColor', fixed: 'backgroundColor' },
+    { label: 'Table header on background', fg: rules.secondaryColor, bg: rules.backgroundColor, required: 4.5, mutable: 'secondaryColor', fixed: 'backgroundColor' },
   ];
 }
 

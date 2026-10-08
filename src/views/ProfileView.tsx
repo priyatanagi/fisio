@@ -10,8 +10,18 @@ interface ProfileViewProps {
   onSaveRules: (rules: UniversalRules) => void;
 }
 
-export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onSave }) => (
+export const ProfileView: React.FC<ProfileViewProps> = ({
+  profile,
+  onSave,
+  universalRules,
+  onSaveRules,
+}) => (
   <div className="p-4 sm:p-6 lg:p-8">
-    <UserProfileForm profile={profile} onSave={onSave} />
+    <UserProfileForm
+      profile={profile}
+      onSave={onSave}
+      universalRules={universalRules}
+      onSaveRules={onSaveRules}
+    />
   </div>
 );

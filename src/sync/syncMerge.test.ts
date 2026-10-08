@@ -5,7 +5,7 @@ import {
   mergeArticleLists,
   rowToSettings,
   sanitizeCloudArticle,
-  sanitizeCloudProfile,
+  sanitizeProfile,
   sanitizeCloudRules,
   settingsToRow,
   shrinkArticleForCloud,
@@ -149,16 +149,16 @@ describe('shrinkArticleForCloud', () => {
   });
 });
 
-describe('sanitizeCloudProfile', () => {
+describe('sanitizeProfile', () => {
   it('fills every missing field from the defaults', () => {
-    const profile = sanitizeCloudProfile({ businessName: 'GymCo' });
+    const profile = sanitizeProfile({ businessName: 'GymCo' });
     expect(profile?.businessName).toBe('GymCo');
     expect(profile?.niche).toBe(DEFAULT_USER_PROFILE.niche);
     expect(profile?.designRules.primaryColor).toBe(DEFAULT_USER_PROFILE.designRules.primaryColor);
   });
 
   it('keeps design tokens and exclusions that came back as proper values', () => {
-    const profile = sanitizeCloudProfile({
+    const profile = sanitizeProfile({
       businessName: 'GymCo',
       designRules: { primaryColor: '#123456', bodyStyle: 'serif' },
       exclusions: ['no clinical'],
@@ -170,7 +170,7 @@ describe('sanitizeCloudProfile', () => {
   });
 
   it('falls back when a whole profile is nonsense', () => {
-    expect(sanitizeCloudProfile(42)).toBeNull();
+    expect(sanitizeProfile(42)).toBeNull();
   });
 });
 

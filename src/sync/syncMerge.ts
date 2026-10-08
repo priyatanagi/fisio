@@ -19,8 +19,9 @@ import type {
   OutputFormatId,
   SeoMetadata,
 } from '../types/article';
-import type { UserProfile } from '../types/profile';
+import type { DesignRules, UserProfile } from '../types/profile';
 import { DEFAULT_USER_PROFILE } from '../types/profile';
+import { ALL_TOKENS } from '../config/designTokens';
 import type { UniversalRules } from '../config/universalRules';
 import { DEFAULT_UNIVERSAL_RULES } from '../config/universalRules';
 import type { PipelineConfig } from '../pipeline/stages';
@@ -239,12 +240,23 @@ export function shrinkArticleForCloud(
   return trimmed;
 }
 
-export function sanitizeCloudProfile(raw: unknown): UserProfile | null {
+/**
+ * Rebuilds a profile from an untrusted document — a cloud row or a JSON file the
+ * user picked. Missing or damaged fields fall back to the defaults, and every
+ * token declared in `ALL_TOKENS` is preserved, not just the ones that existed
+ * when this function was first written (an older sanitizer silently dropped the
+ * element tokens, which gutted a profile on import).
+ */
+export function sanitizeProfile(raw: unknown): UserProfile | null {
   const obj = plainObject(raw);
   if (!obj) return null;
   const design = plainObject(obj.designRules) ?? {};
   const defaults = DEFAULT_USER_PROFILE.designRules;
-  const token = (key: keyof typeof defaults, fallback: string) => str(design[key], fallback);
+  const designRules = { ...defaults } as Record<string, string>;
+  for (const token of ALL_TOKENS) {
+    const value = design[token.key];
+    if (typeof value === 'string') designRules[token.key] = value;
+  }
 
   const overrides = plainObject(obj.formatOverrides);
   const cleanOverrides: Record<string, Record<string, string>> = {};
@@ -264,18 +276,7 @@ export function sanitizeCloudProfile(raw: unknown): UserProfile | null {
     usp: str(obj.usp, DEFAULT_USER_PROFILE.usp),
     toneOfVoice: str(obj.toneOfVoice, DEFAULT_USER_PROFILE.toneOfVoice),
     defaultCta: str(obj.defaultCta, DEFAULT_USER_PROFILE.defaultCta),
-    designRules: {
-      ...defaults,
-      primaryColor: token('primaryColor', defaults.primaryColor),
-      secondaryColor: token('secondaryColor', defaults.secondaryColor),
-      accentColor: token('accentColor', defaults.accentColor),
-      backgroundColor: token('backgroundColor', defaults.backgroundColor),
-      textColor: token('textColor', defaults.textColor),
-      headingFont: token('headingFont', defaults.headingFont),
-      bodyFont: token('bodyFont', defaults.bodyFont),
-      buttonStyle: token('buttonStyle', defaults.buttonStyle),
-      blockquoteStyle: token('blockquoteStyle', defaults.blockquoteStyle),
-    },
+    designRules: designRules as unknown as DesignRules,
     exclusions: Array.isArray(obj.exclusions)
       ? obj.exclusions.filter((entry): entry is string => typeof entry === 'string' && Boolean(entry))
       : [...DEFAULT_USER_PROFILE.exclusions],
@@ -328,7 +329,7 @@ export function settingsToRow(settings: CloudSettings, workspaceSecret: string):
 export function rowToSettings(row: CloudRow): CloudSettings | null {
   const updatedAt = row.updated_at;
   if (typeof updatedAt !== 'string' || !updatedAt) return null;
-  const profile = sanitizeCloudProfile(row.profile);
+  const profile = sanitizeProfile(row.profile);
   if (!profile) return null;
   return {
     profile,

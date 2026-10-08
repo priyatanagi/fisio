@@ -1,52 +1,39 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Building2, Check, Palette, Plus, ShieldCheck, SlidersHorizontal, X } from 'lucide-react';
+import {
+  Building2,
+  Check,
+  Download,
+  FileUp,
+  Palette,
+  Plus,
+  RotateCcw,
+  ShieldCheck,
+  SlidersHorizontal,
+  X,
+} from 'lucide-react';
 import type { UserProfile } from '../types/profile';
-import { DEFAULT_USER_PROFILE, FALLBACK_BRAND, isProfileConfigured } from '../types/profile';
+import { FALLBACK_BRAND, isProfileConfigured } from '../types/profile';
+import type { UniversalRules } from '../config/universalRules';
 import { TOKEN_GROUPS, readToken, withTokenDefaults, type Token } from '../config/designTokens';
 import { applyPreset, importPreset, BRAND_PRESETS, type FormatOverrides } from '../config/brandPresets';
 import { LiveTokenTestBanner } from './LiveTokenTestBanner';
 import { BrandKitPanel } from './BrandKitPanel';
 import { RuleDiffPanel } from './RuleDiffPanel';
+import {
+  parseProfileJson,
+  profileToJson,
+  resetProfileSection,
+  PROFILE_SECTION_LABELS,
+  SAMPLE_PROFILE,
+  type ProfileSection,
+} from '../utils/profileIO';
 
 interface UserProfileFormProps {
   profile: UserProfile;
   onSave: (profile: UserProfile) => void;
+  universalRules: UniversalRules;
+  onSaveRules: (rules: UniversalRules) => void;
 }
-
-const SAMPLE_PROFILE: UserProfile = {
-  businessName: 'Klinik Sehat Sentosa',
-  niche: 'Klinik fisioterapi dan rehabilitas',
-  location: 'Jakarta Selatan, Indonesia',
-  targetMarket: 'Karyawan kantoran usia 25-45 tahun dengan keluhan nyeri punggung',
-  usp: 'Terapi manualcombine dengan latihan rehabilitasi berbasis bukti, Curves of research',
-  toneOfVoice: 'Profesional, hangat, dan mudah dipahami',
-  defaultCta: 'Jadwalkan konsultasi fisioterapi pertama Anda hari ini.',
-  designRules: {
-    primaryColor: '#0d9488',
-    secondaryColor: '#134e4a',
-    accentColor: '#f59e0b',
-    backgroundColor: '#f8fafc',
-    textColor: '#1f2937',
-    headingFont: '"Plus Jakarta Sans", system-ui, sans-serif',
-    bodyFont: 'Inter, system-ui, sans-serif',
-    textAlignment: 'left',
-    buttonStyle: 'rounded',
-    blockquoteStyle: 'accent-bar',
-    bodyStyle: 'readable',
-    headingStyle: 'strong',
-    hyperlinkStyle: 'underline',
-    bulletStyle: 'disc',
-    numberingStyle: 'decimal',
-    imageStyle: 'rounded',
-    codeStyle: 'subtle',
-    tableStyle: 'header-fill',
-    faqStyle: 'divided',
-  },
-  exclusions: [
-    'EXCLUDE voucher and discount searches ("diskon fisioterapi", "promo gratis") — position on clinical outcomes, not price.',
-    'EXCLUDE acute emergency searches ("fisioterapi积分 emergency 24 jam") — refer those cases to a hospital.',
-  ],
-};
 
 /** Layout mirrors the reference: short fields pair up, long ones span both columns. */
 const FIELD_LABELS: {
@@ -62,6 +49,44 @@ const FIELD_LABELS: {
   { key: 'targetMarket', label: 'Target market', placeholder: 'Office workers aged 25-45 with back pain', full: true },
   { key: 'usp', label: 'Unique selling proposition', placeholder: 'What sets you apart?', full: true },
   { key: 'toneOfVoice', label: 'Tone of voice', placeholder: 'Professional, warm, easy to read', full: true },
+];
+
+/** Tab names, kept separate from the longer "what this clears" labels. */
+const SECTION_NAMES: Record<ProfileSection, string> = {
+  business: 'Business',
+  brand: 'Brand kit',
+  design: 'Design & preview',
+  rules: 'Content rules',
+};
+
+type NumericRuleKey =
+  | 'targetFleschMin'
+  | 'targetFleschMax'
+  | 'maxSentenceWords'
+  | 'minSentencesPerParagraph'
+  | 'minParagraphsPerH2'
+  | 'seoTitleMaxChars'
+  | 'metaDescriptionMaxChars'
+  | 'focusKeyphraseMaxChars';
+
+type ToggleRuleKey = 'requireStats' | 'requireFaq' | 'allowH1InArticle' | 'allowInlineScripts';
+
+const NUMERIC_RULE_FIELDS: { key: NumericRuleKey; label: string; hint: string }[] = [
+  { key: 'targetFleschMin', label: 'Flesch min', hint: 'Lower bound of the readability target' },
+  { key: 'targetFleschMax', label: 'Flesch max', hint: 'Upper bound of the readability target' },
+  { key: 'maxSentenceWords', label: 'Max words / sentence', hint: '' },
+  { key: 'minSentencesPerParagraph', label: 'Min sentences / paragraph', hint: 'No single-sentence paragraphs' },
+  { key: 'minParagraphsPerH2', label: 'Min paragraphs / H2', hint: '' },
+  { key: 'seoTitleMaxChars', label: 'SEO title max chars', hint: '' },
+  { key: 'metaDescriptionMaxChars', label: 'Meta description max', hint: '' },
+  { key: 'focusKeyphraseMaxChars', label: 'Keyphrase max chars', hint: '' },
+];
+
+const TOGGLE_RULE_FIELDS: { key: ToggleRuleKey; label: string }[] = [
+  { key: 'requireStats', label: 'Require statistics' },
+  { key: 'requireFaq', label: 'Require FAQ' },
+  { key: 'allowH1InArticle', label: 'Allow <h1> in body' },
+  { key: 'allowInlineScripts', label: 'Allow inline scripts' },
 ];
 
 interface TokenFieldProps {
@@ -146,13 +171,23 @@ const TokenField: React.FC<TokenFieldProps> = ({ token, value, onChange }) => {
   );
 };
 
-export const UserProfileForm: React.FC<UserProfileFormProps> = ({ profile, onSave }) => {
+export const UserProfileForm: React.FC<UserProfileFormProps> = ({
+  profile,
+  onSave,
+  universalRules,
+  onSaveRules,
+}) => {
   const [draft, setDraft] = useState<UserProfile>(profile);
+  const [rules, setRules] = useState<UniversalRules>(universalRules);
   const [hasChanges, setHasChanges] = useState(false);
+  const [rulesDirty, setRulesDirty] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved');
-  const [section, setSection] = useState<'business' | 'brand' | 'design' | 'rules'>('business');
+  const [section, setSection] = useState<ProfileSection>('business');
   const [previewWidth, setPreviewWidth] = useState(50);
   const designLayoutRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [fileMessage, setFileMessage] = useState<string | null>(null);
+  const [pendingReset, setPendingReset] = useState<string | null>(null);
   const [newExclusion, setNewExclusion] = useState('');
   const [overrides, setOverrides] = useState<FormatOverrides>(
     () => profile.formatOverrides ?? {}
@@ -170,15 +205,25 @@ export const UserProfileForm: React.FC<UserProfileFormProps> = ({ profile, onSav
     setSaveStatus('saving');
   };
 
+  const updateRules = (next: UniversalRules) => {
+    setRules(next);
+    setRulesDirty(true);
+    setSaveStatus('saving');
+  };
+
+  // One debounce for both documents: the profile and the writing rules are
+  // separate app states, so each is handed to its own save handler.
   useEffect(() => {
-    if (!hasChanges) return;
+    if (!hasChanges && !rulesDirty) return;
     const timeout = window.setTimeout(() => {
-      onSave({ ...draft, formatOverrides: overrides });
+      if (hasChanges) onSave({ ...draft, formatOverrides: overrides });
+      if (rulesDirty) onSaveRules(rules);
       setHasChanges(false);
+      setRulesDirty(false);
       setSaveStatus('saved');
     }, 500);
     return () => window.clearTimeout(timeout);
-  }, [draft, hasChanges, onSave, overrides]);
+  }, [draft, overrides, rules, hasChanges, rulesDirty, onSave, onSaveRules]);
 
   const setField = <K extends keyof UserProfile>(key: K, value: UserProfile[K]) =>
     updateDraft((prev) => ({ ...prev, [key]: value }));
@@ -200,6 +245,41 @@ export const UserProfileForm: React.FC<UserProfileFormProps> = ({ profile, onSav
       const result = importPreset(payload);
       return result.preset ? { ...prev, designRules: result.preset.rules } : prev;
     });
+  };
+
+  const downloadJson = (filename: string, payload: string) => {
+    const url = URL.createObjectURL(new Blob([payload], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importFromFile = async (file: File) => {
+    const result = parseProfileJson(await file.text());
+    if (!result.ok) {
+      setFileMessage(`${file.name}: ${result.error}`);
+      return;
+    }
+    updateDraft(result.profile);
+    updateOverrides(result.profile.formatOverrides ?? {});
+    const slug = result.profile.businessName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'profile';
+    setFileMessage(`Loaded ${slug} — ${result.profile.exclusions.length} exclusion rule(s).`);
+  };
+
+  // A reset only ever clears the section on screen, and it is confirmed first:
+  // one stray click used to wipe the whole brand kit with no way back.
+  const applyReset = () => {
+    if (!section) return;
+    const next = resetProfileSection(section, { profile: draft, overrides, rules });
+    setDraft(next.profile);
+    setOverrides(next.overrides);
+    setRules(next.rules);
+    setHasChanges(true);
+    setRulesDirty(true);
+    setSaveStatus('saving');
+    setPendingReset(null);
   };
 
   return (
@@ -254,13 +334,57 @@ export const UserProfileForm: React.FC<UserProfileFormProps> = ({ profile, onSav
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => updateDraft(SAMPLE_PROFILE)}
-          className="px-3 py-1.5 rounded-lg bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 text-xs inline-flex items-center gap-1.5"
-        >
-          <Plus className="w-3.5 h-3.5" />Load sample profile
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="px-3 py-1.5 rounded-lg bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 text-xs inline-flex items-center gap-1.5"
+          >
+            <FileUp className="w-3.5 h-3.5" />Import profile from file
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              downloadJson(
+                `sample-profile-${SAMPLE_PROFILE.businessName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.json`,
+                profileToJson(SAMPLE_PROFILE)
+              )
+            }
+            className="px-3 py-1.5 rounded-lg bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 text-xs inline-flex items-center gap-1.5"
+          >
+            <Download className="w-3.5 h-3.5" />Download sample profile
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              downloadJson(
+                `${(draft.businessName.trim() || 'profile').toLowerCase().replace(/[^a-z0-9]+/g, '-')}.json`,
+                profileToJson({ ...draft, formatOverrides: overrides })
+              )
+            }
+            className="px-3 py-1.5 rounded-lg bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 text-xs inline-flex items-center gap-1.5"
+          >
+            <Download className="w-3.5 h-3.5" />Download my profile
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            aria-label="Choose a profile JSON file"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (file) void importFromFile(file);
+            }}
+          />
+        </div>
+
+        {fileMessage && (
+          <p className="text-[11px] text-zinc-400 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2">
+            {fileMessage}
+          </p>
+        )}
 
         {!isProfileConfigured(draft) && (
           <div className="p-3 bg-amber-950/40 border border-amber-900 rounded-lg text-[11px] text-amber-300">
@@ -294,6 +418,7 @@ export const UserProfileForm: React.FC<UserProfileFormProps> = ({ profile, onSav
         <BrandKitPanel
           rules={withTokenDefaults(draft.designRules)}
           onApplyPreset={handleApplyPreset}
+          onRulesChange={(next) => updateDraft((prev) => ({ ...prev, designRules: next }))}
           overrides={overrides}
           onOverrideChange={updateOverrides}
         />
@@ -429,19 +554,106 @@ export const UserProfileForm: React.FC<UserProfileFormProps> = ({ profile, onSav
             <Plus className="w-3.5 h-3.5" /> Add Rule
           </button>
         </div>
+
+        <div className="pt-3 border-t border-zinc-800 space-y-3">
+          <div>
+            <h3 className="text-xs font-semibold text-zinc-200">Writing & SEO rules</h3>
+            <p className="text-[11px] text-zinc-500">
+              The numbers every generation is measured against. They travel with your profile, so a
+              second device reads the same limits.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {NUMERIC_RULE_FIELDS.map((field) => (
+              <label key={field.key} className="block space-y-1">
+                <span className="text-[10px] text-zinc-400" title={field.hint}>
+                  {field.label}
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  value={rules[field.key]}
+                  onChange={(event) => {
+                    const value = Number.parseInt(event.target.value, 10);
+                    if (!Number.isFinite(value) || value < 1) return;
+                    updateRules({ ...rules, [field.key]: value });
+                  }}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-[11px] font-mono text-zinc-100 outline-none focus:border-zinc-500"
+                />
+              </label>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {TOGGLE_RULE_FIELDS.map((field) => (
+              <label
+                key={field.key}
+                className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[11px] cursor-pointer transition-colors ${
+                  rules[field.key]
+                    ? 'border-teal-800 bg-teal-950/40 text-teal-200'
+                    : 'border-zinc-800 bg-zinc-950 text-zinc-400'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={rules[field.key]}
+                  onChange={(event) => updateRules({ ...rules, [field.key]: event.target.checked })}
+                  className="accent-teal-500"
+                />
+                {field.label}
+              </label>
+            ))}
+          </div>
+        </div>
       </section>}
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <button
-          onClick={() => {
-            updateDraft(DEFAULT_USER_PROFILE);
-            updateOverrides({});
-          }}
-          className="px-3 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-400 text-xs"
+          onClick={() => setPendingReset(PROFILE_SECTION_LABELS[section])}
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-zinc-200 text-xs"
         >
-          Reset
+          <RotateCcw className="w-3.5 h-3.5" />
+          Reset this section
         </button>
+        <span className="text-[11px] text-zinc-600">
+          Clears only <span className="text-zinc-400">{SECTION_NAMES[section]}</span> — the other
+          tabs keep their values.
+        </span>
       </div>
+
+      {pendingReset && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm reset"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+        >
+          <div className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-5 space-y-4 shadow-2xl">
+            <div>
+              <h4 className="text-sm font-semibold text-zinc-100">Reset {pendingReset}?</h4>
+              <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
+                Everything in this section goes back to its default values. This cannot be undone —
+                other sections and your saved articles are not touched.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setPendingReset(null)}
+                className="px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs"
+              >
+                Keep them
+              </button>
+              <button
+                onClick={applyReset}
+                className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium"
+              >
+                Reset section
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

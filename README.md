@@ -60,7 +60,7 @@ including **free local inference via Ollama**.
 | AI SDKs | `@google/genai` (server-only, never bundled to the browser) + plain `fetch` (OpenAI / Anthropic / Ollama) |
 | Persistence | Hand-rolled IndexedDB layer (`src/db`, v2), `localStorage` |
 | Export | `jszip` |
-| Tests | Vitest (655 tests / 47 files), `fake-indexeddb` |
+| Tests | Vitest (680 tests / 49 files), `fake-indexeddb` |
 | Cloud (optional) | Supabase PostgREST through plain `fetch` — no SDK, so the bundle stays small |
 
 TypeScript is checked with `tsc --noEmit` (the `lint` script). No separate linter is configured.
@@ -207,12 +207,23 @@ Key files: `src/pipeline/runArticle.ts`, `src/pipeline/runAgent.ts`, `src/pipeli
 - **`src/config/tokenCss.ts`** — compiles tokens into the real stylesheet (clean and inline modes)
   and **verifies generated HTML** for palette compliance (`verifyTokenCompliance`).
 - **`src/config/tokenContrast.ts`** — WCAG 2.1 contrast validation of token pairs, surfaced when
-  the profile is saved.
+  the profile is saved. Every reading pairing also declares which token a repair is allowed to
+  move, so the page background is never the thing that gets repainted.
+- **`src/config/contrastFixes.ts`** — turns those failures into a concrete proposal: the offending
+  colour's lightness is walked (hue and saturation held) to the closest value that clears 4.5:1,
+  and the Brand kit panel shows it as an **Auto-fix contrast** button. A colour that cannot be
+  measured (someone typed `red`) is listed as unresolved instead of being silently scored.
 - **`src/config/brandPresets.ts` + `BrandKitPanel`** — named complete presets with per-format
   overrides, plus export/import of the kit.
 - **`UserProfileForm`** (Profile view) — business info, tone, CTA, and a resizable split of design
   token controls vs. a live article-sample preview (`LiveTokenTestBanner`); `RuleDiffPanel` shows
-  unsaved token diffs before they overwrite.
+  unsaved token diffs before they overwrite. The four tabs each own their data: **Content rules**
+  holds the search exclusions *and* the writing/SEO numbers (`UniversalRules`), and
+  **Reset this section** clears only the tab on screen behind a confirm dialog.
+- **`src/utils/profileIO.ts`** — the profile as a portable JSON document: download your own,
+  download the sample, or import a file (both the export envelope and a bare profile object are
+  accepted, unknown shapes are refused rather than half-applied). Provider keys are deliberately
+  not part of this document.
 
 ---
 
@@ -502,13 +513,15 @@ docs/
 
 ## Testing
 
-`npm test` runs **655 tests across 47 files** covering the pipeline cost matrix and review gate
+`npm test` runs **680 tests across 49 files** covering the pipeline cost matrix and review gate
 (with the `resumeArticle` retry/skip paths), the batch queue state machine, CSV parsing, brief
 normalization, scoring and topic fidelity, brand tokens / token CSS / contrast, export, role-schema
 validation, prompt builders, model catalog, agent events, the IndexedDB layer and its migration,
 and the hash router. The cloud layer is covered against a stand-in PostgREST (request headers,
 Range paging, upsert conflict targets, RLS rejection mapping), plus merge ordering, payload
-sanitizers, the offline queue and tombstones. `npm run lint` type-checks the whole project.
+sanitizers, the offline queue and tombstones. The profile layer is covered too: JSON import/export
+(including the shapes it refuses), the per-section reset scope, and the contrast repair keeping hue
+and saturation while clearing 4.5:1. `npm run lint` type-checks the whole project.
 
 ---
 

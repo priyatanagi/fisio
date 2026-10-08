@@ -1,16 +1,25 @@
 import React, { useState } from 'react';
-import { AlertTriangle, Check, Download, Upload, X } from 'lucide-react';
+import { AlertTriangle, Check, Download, Upload, Wand2, X } from 'lucide-react';
 import type { DesignRules } from '../types/profile';
 import { BRAND_PRESETS, applyPreset, exportPreset, importPreset, type FormatOverrides, setFormatOverride } from '../config/brandPresets';
 import { ALL_TOKENS, readToken } from '../config/designTokens';
 import { validateContrast } from '../config/tokenContrast';
+import { suggestContrastFixes } from '../config/contrastFixes';
 
 interface BrandKitPanelProps {
   rules: DesignRules;
   onApplyPreset: (presetId: string) => void;
+  /** Applies an auto-fix; the panel never writes the profile by itself. */
+  onRulesChange: (next: DesignRules) => void;
   overrides: FormatOverrides;
   onOverrideChange: (next: FormatOverrides) => void;
 }
+
+const TOKEN_LABELS: Record<string, string> = {
+  primaryColor: 'Primary',
+  secondaryColor: 'Headings',
+  textColor: 'Body text',
+};
 
 const OUTPUT_FORMATS = [
   { id: 'inline-en', label: 'Inline CSS (EN)' },
@@ -27,6 +36,7 @@ const OVERRIDE_TOKENS = ALL_TOKENS.filter(
 export const BrandKitPanel: React.FC<BrandKitPanelProps> = ({
   rules,
   onApplyPreset,
+  onRulesChange,
   overrides,
   onOverrideChange,
 }) => {
@@ -36,6 +46,7 @@ export const BrandKitPanel: React.FC<BrandKitPanelProps> = ({
   const [showExport, setShowExport] = useState(false);
 
   const issues = validateContrast(rules);
+  const repair = issues.length ? suggestContrastFixes(rules) : { fixes: [], rules, unresolved: [] };
 
   const doExport = () => {
     const kit = exportPreset('My brand kit', rules, 'Exported from the profile page.');
@@ -64,18 +75,48 @@ export const BrandKitPanel: React.FC<BrandKitPanelProps> = ({
 
       {/* Contrast report (#2) */}
       {issues.length > 0 && (
-        <div className="p-2.5 bg-rose-950/40 border border-rose-900 rounded-lg">
+        <div className="p-2.5 bg-rose-950/40 border border-rose-900 rounded-lg space-y-2">
           <div className="flex items-center gap-1.5 text-[11px] text-rose-300 font-medium">
             <AlertTriangle className="w-3.5 h-3.5" />
             {issues.length} contrast problem{issues.length > 1 ? 's' : ''}
           </div>
-          <ul className="mt-1.5 space-y-1">
-            {issues.map((issue) => (
-              <li key={issue.label} className="text-[10px] text-rose-200/80 leading-relaxed">
-                <span className="font-medium">{issue.label}:</span> {issue.advice}
-              </li>
-            ))}
-          </ul>
+
+          {repair.fixes.map((fix) => (
+            <div key={fix.token} className="flex flex-wrap items-center gap-2 text-[10px] text-rose-100/90">
+              <span className="flex items-center gap-1">
+                <span className="w-3 h-3 rounded-full border border-zinc-600" style={{ background: fix.from }} />
+                <span className="w-3 h-3 rounded-full border border-zinc-600" style={{ background: fix.to }} />
+              </span>
+              <span className="font-mono">
+                {TOKEN_LABELS[fix.token] ?? fix.token}: {fix.from} → {fix.to}
+              </span>
+              <span className="text-rose-200/70">
+                {fix.achieved}:1, clears {fix.repairs.length} pairing{fix.repairs.length > 1 ? 's' : ''} ({fix.repairs.join(', ')})
+              </span>
+            </div>
+          ))}
+
+          {repair.unresolved.map((label) => (
+            <p key={label} className="text-[10px] text-rose-200/80 leading-relaxed">
+              <span className="font-medium">{label}:</span> use a 6-digit hex value so this can be
+              measured and fixed automatically.
+            </p>
+          ))}
+
+          {repair.fixes.length > 0 && (
+            <button
+              onClick={() => onRulesChange(repair.rules)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-[11px] font-medium"
+            >
+              <Wand2 className="w-3.5 h-3.5" />
+              Auto-fix contrast
+            </button>
+          )}
+          <p className="text-[10px] text-rose-200/60 leading-relaxed">
+            {repair.fixes.length > 0
+              ? 'Each fix keeps the hue and saturation and only moves the lightness as far as AA requires — the page background is never changed.'
+              : 'The colours are not readable yet, so no automatic fix is possible. Set 6-digit hex values in Design & preview.'}
+          </p>
         </div>
       )}
       {issues.length === 0 && (
