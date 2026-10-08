@@ -56,11 +56,11 @@ including **free local inference via Ollama**.
 |---|---|
 | UI | React 19, TypeScript, Tailwind CSS v4, `lucide-react`, `motion` |
 | Build / dev | Vite 8 (`@vitejs/plugin-react`), `tsx` |
-| Server | Express 4 (serves the Vite dev middleware and the API) |
-| AI SDKs | `@google/genai` + plain `fetch` (OpenAI / Anthropic / Ollama) |
+| Server | Express 4 locally (Vite middleware + API); Vercel functions in `api/` for deployment — both wrap the same handler cores |
+| AI SDKs | `@google/genai` (server-only, never bundled to the browser) + plain `fetch` (OpenAI / Anthropic / Ollama) |
 | Persistence | Hand-rolled IndexedDB layer (`src/db`, v2), `localStorage` |
 | Export | `jszip` |
-| Tests | Vitest (523 tests / 36 files), `fake-indexeddb` |
+| Tests | Vitest (573 tests / 41 files), `fake-indexeddb` |
 
 TypeScript is checked with `tsc --noEmit` (the `lint` script). No separate linter is configured.
 
@@ -91,10 +91,10 @@ Two safeguards back that up, because a restored browser tab can otherwise show y
 
 ### Zero-cost testing with Ollama
 
-Open the **Providers** view, pick a role, choose **Ollama (Local)**, and (optionally) press
-**Test**. Then generate — no API key or spend. By default the provider resolves to
-`http://localhost:11434` / model `gemma4:e4b`; change either per role, or globally with the
-`OLLAMA_BASE_URL` / `OLLAMA_MODEL` env fallbacks.
+Open the **Providers** view, pick a role, choose **Ollama (Local)**, and press **Test**. Then
+generate — no API key or spend. The browser calls your local Ollama directly
+(`http://localhost:11434` by default); the server never touches it. One-time setup on the Ollama
+side is required — see [Using Ollama](#using-ollama).
 
 ---
 
@@ -108,11 +108,11 @@ fallbacks/defaults** — per-role provider settings live in the Providers view (
 | `GEMINI_API_KEY` | Fallback key for the Gemini provider (only needed when a Gemini role leaves its own key blank). |
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | Server-side fallbacks for the OpenAI-compatible provider (blank per-role fields fall back to these). |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` | Same fallback pattern for Anthropic. |
-| `OLLAMA_BASE_URL` | Default base URL for the Ollama provider (blank per-role base URL falls back to this). |
-| `OLLAMA_MODEL` | Default model id for the Ollama provider (blank per-role model falls back to this). |
-| `APP_URL` | Hosted app URL used for self-referential links. |
-| `PORT` | Express listen port; defaults to `5177` with automatic fallback. |
-| `DISABLE_HMR` | Set to `true` to disable Vite HMR/file watching (used by hosted editors). |
+| `PORT` | Express listen port; defaults to `5177` with automatic fallback. Local/self-host only. |
+| `DISABLE_HMR` | Set to `true` to disable Vite HMR/file watching (used by hosted editors). Local dev only. |
+
+Ollama has **no server-side variables**: its base URL and model are configured per role in the
+Providers view, because the browser — not the server — talks to your local Ollama.
 
 ### Provider roles
 
@@ -231,10 +231,15 @@ CSV columns: `Topic_Idea`, `Focus_Keyphrase`, `Target_Length`, `Tone_Override`.
 
 ## Live activity feed
 
-- The server buffers per-run `AgentEvent`s in memory (`src/server/agentEvents.ts`, 10-minute TTL,
-  400 events/run) published around every provider call.
-- `GET /api/events?runId&since` is polled every 400 ms by `src/pipeline/agentEvents.ts`; the
-  `useAgentEvents` hook adds a 700 ms final flush so nothing is cut off.
+- Cloud runs stream their activity as **NDJSON lines inside the `/api/run-agent` response
+  itself** (`{"kind":"event",...}` while the provider call is in flight, one closing
+  `{"kind":"result",...}` line). Ollama runs execute in the browser and emit the same events
+  directly — one pipeline, two transports.
+- `src/pipeline/agentEvents.ts` is a **client-side event bus**: every event is stamped with a
+  per-run id on append, so parallel batch streams that share one `runId` stay in a single,
+  gap-free log. `useAgentEvents` just subscribes; there is no polling and no server-side buffer.
+- If a stream dies mid-run, the events already received stay in the log and `runAgent` appends a
+  local `failed` event so the log always has a closing entry.
 - `agentActivity.ts` reduces events into per-call records (attempts, repairs, chunk fallbacks,
   token usage, timings) that `ActivityPanel.tsx` renders as a live log with stage totals.
 
@@ -261,26 +266,91 @@ read the app's `localStorage`, cookies, or IndexedDB.
 
 ---
 
+## Using Ollama
+
+Ollama inference happens **in your browser**: the app calls the Ollama server on your machine
+directly, so the deployed site never sees your local models — and the server refuses Ollama
+requests with a clear message instead of silently failing.
+
+One-time setup:
+
+1. **Start Ollama:** `ollama serve` (listens on port 11434).
+2. **Pull a model:** e.g. `ollama pull gemma4:e4b`.
+3. **Allow this site's origin.** Ollama rejects cross-origin requests by default, and an HTTPS
+   deployment is not an allowed origin. Set `OLLAMA_ORIGINS` *before* starting the server, to the
+   exact origin you browse the app from (e.g. `http://localhost:5177` in dev, or
+   `https://<app>.vercel.app` once deployed):
+   - **Windows:** `setx OLLAMA_ORIGINS "https://<app>.vercel.app,http://localhost:5177"` then
+     restart Ollama (close it from the tray icon, not just the terminal).
+   - **macOS:** `launchctl setenv OLLAMA_ORIGINS "https://<app>.vercel.app"` then restart the
+     Ollama app.
+   - **Linux:** `OLLAMA_ORIGINS="https://<app>.vercel.app" ollama serve`.
+
+   Prefer specific origins over `*` — a wildcard lets **any** website your browser visits reach
+   your local Ollama.
+4. **Verify:** press **Test** in the Providers view — it queries `{baseUrl}/api/tags` from the
+   browser and reports the model count, or explains how to allow the origin when the call fails.
+
+Calling `http://localhost:11434` from an HTTPS page is allowed by browsers (localhost is treated
+as a secure context), so there is no mixed-content problem in the normal case. The model list and
+connection test for Ollama also bypass the server entirely; cloud providers keep going through
+it, because their keys live server-side when you use the env fallbacks.
+
+---
+
+## Deploying to Vercel
+
+The repository deploys as-is (Option A: native serverless functions, no Express on Vercel):
+
+1. Push the repo and **Import** it in Vercel — the Vite preset is auto-detected
+   (`vercel.json` pins build command and output).
+2. Set environment variables in **Project Settings → Environment Variables**:
+   `GEMINI_API_KEY` and any `OPENAI_*` / `ANTHROPIC_*` fallbacks you want. All are optional —
+   per-role keys typed in the Providers view work without any dashboard config, as does an
+   Ollama-only setup (zero cloud keys). Do **not** set `PORT` or `DISABLE_HMR`.
+3. Deploy. `api/*.ts` become `/api/*` automatically; `vercel.json` rewrites everything except
+   `/api/` to `index.html` for the SPA.
+
+`api/health.ts`, `api/test-provider.ts`, `api/models.ts` and `api/run-agent.ts` are thin
+Request/Response adapters over the same handler cores as the Express app
+(`src/server/handlers.ts`), so validation, messages and the NDJSON stream are identical on both
+platforms. `npm run dev` / `npm start` keep using Express + Vite middleware locally.
+
+Caveats of the serverless target:
+
+| Caveat | Impact | Mitigation |
+|---|---|---|
+| Request payload limit is 4.5 MB (the Express 25 MB limit is local-only) | Large batch payloads can be rejected with 413 | Keep batches modest; articles are stored client-side in IndexedDB, not through the server |
+| `maxDuration` 300 s on `api/run-agent` | A run over 5 minutes returns 504 | Rare for cloud models (typically < 2 min); the value can be raised on paid plans |
+| Model-catalog cache is in-memory per instance | Occasional re-fetch of a provider's catalog | Harmless |
+| `pid`/`port`/`instance` in local `/api/health` | Not meaningful serverless | Vercel's `api/health` answers without them; the UI footer degrades gracefully |
+
+---
+
 ## HTTP API
 
-The SPA drives the pipeline one role at a time through the server:
+Cloud roles run through the server, one role per request; Ollama runs go straight from the
+browser to the local server. `GET /api/events` no longer exists — activity streams inside the
+run-agent response.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/health` | Liveness + `hasKey` (whether a server Gemini key is present), plus `app`, `instance`, `port`, `pid` and `startedAt` so you can tell which dev server answered. |
-| `POST /api/run-agent` | Runs a single role: builds the prompt, calls the provider (with chunked fallback where applicable), validates the JSON shape (one repair attempt on a shape problem), publishes trace events, returns typed data. |
-| `POST /api/test-provider` | Connectivity test per provider. Lists the real model catalog first (so messages name actual models), then probes: Ollama/openai use model listing; Gemini/Anthropic run a tiny JSON round-trip. |
-| `POST /api/models` | Real model catalog for the provider/baseURL/key currently in the form (`src/server/modelCatalog.ts`, 60 s cache, offline fallback). |
-| `GET /api/events` | Poll the buffered agent activity log for a run (`runId`, `since` cursor). |
+| `GET /api/health` | Liveness + `hasKey` (boolean only — a key value never leaves the server), plus `app`, `instance`, `port`, `pid` and `startedAt` so you can tell which dev server answered (`pid`/`port` are local-only). |
+| `POST /api/run-agent` | Runs a single role and **responds with NDJSON**: `{"kind":"event",...}` lines as the pipeline progresses (call-start, attempt, model-fallback, repair, chunk, completed/failed), then exactly one closing `{"kind":"result", ok, data/error, telemetry}` line. Ollama requests are rejected with 400 pointing at the browser. |
+| `POST /api/test-provider` | Connectivity test for cloud providers: lists the real model catalog first (so messages name actual models), then probes. Ollama is tested by the browser directly. |
+| `POST /api/models` | Real model catalog for a cloud provider (`src/server/modelCatalog.ts`, 60 s cache, offline fallback). Ollama's catalog is fetched by the browser from `{baseUrl}/api/tags`. |
 
-Provider dispatch and Gemini's rate-limit model ladder live in `src/server/providers.ts`.
+Provider dispatch and Gemini's rate-limit model ladder live in `src/server/providers.ts`
+(cloud) and `src/server/providers/ollama.ts` (browser-safe, no cloud SDK imports).
 
 ---
 
 ## Project structure
 
 ```
-server.ts                    Express app + API routes + Vite middleware, port fallback
+server.ts                    dotenv + port fallback + Vite middleware/static + listen
+vercel.json                  Vercel build settings, maxDuration, SPA rewrite excluding /api
+api/                         Vercel functions: health, test-provider, models, run-agent (NDJSON)
 vite.config.ts               Vite + React + Tailwind setup
 vitest.config.ts             Vitest (node environment, src/**/*.test.ts)
 
@@ -301,13 +371,18 @@ src/
                              ReadabilityScorecard, SeoChecklistPanel, UserProfileForm,
                              BrandKitPanel, DesignTokenPreview, LiveTokenTestBanner,
                              RuleDiffPanel, ModelPicker, Header, RulesModal, ShortcutsModal
-  pipeline/                  runArticle (+resumeArticle), runAgent, stages, seoBrief,
-                             scoreArticle/scoreHtml, topicFidelity, improveArticle,
+  pipeline/                  runArticle (+resumeArticle), runAgent (NDJSON stream reader +
+                             browser-side Ollama branch), stages, seoBrief, providerApi
+                             (catalog/connection test routing), scoreArticle/scoreHtml,
+                             topicFidelity, improveArticle,
                              batchQueue + useBatchQueue (worker pool),
-                             agentEvents + agentActivity + useAgentEvents (live log)
-  server/                    providers (gemini/openai/anthropic/ollama), agentPrompts
-                             (per-role builders incl. improver), roleSchemas (validation),
-                             chunked (truncation fallback), modelCatalog, agentEvents (buffer)
+                             agentEvents (client bus) + agentActivity + useAgentEvents (live log)
+  server/                    app.ts (Express routes), handlers (framework-agnostic cores),
+                             agentRun (executeAgentRun pipeline, shared with the browser),
+                             providers/ollama + providers.ts (gemini/openai/anthropic),
+                             providerCore/providerText, agentPrompts (per-role builders incl.
+                             improver), roleSchemas (validation), chunked (truncation fallback),
+                             modelCatalog (browser-safe, no env requirement)
   types/                     article, profile, provider, run (RunStatus/RunRecord), agentEvents
   utils/                     brandTokens, articleShell, contentVersions, autofillGuard,
                              cleanHtmlUtils, csv, exportUtils (ZIP), document, diff,
@@ -345,7 +420,7 @@ docs/
 
 ## Testing
 
-`npm test` runs **523 tests across 36 files** covering the pipeline cost matrix and review gate
+`npm test` runs **573 tests across 41 files** covering the pipeline cost matrix and review gate
 (with the `resumeArticle` retry/skip paths), the batch queue state machine, CSV parsing, brief
 normalization, scoring and topic fidelity, brand tokens / token CSS / contrast, export, role-schema
 validation, prompt builders, model catalog, agent events, the IndexedDB layer and its migration,

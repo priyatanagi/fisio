@@ -8,7 +8,7 @@ import type {
   KeywordResearch,
   ReviewReport,
 } from '../pipeline/stages';
-import { cleanJsonOutput } from './providers';
+import { cleanJsonOutput } from './providerText';
 
 export type ValidationResult<T> = { ok: true; data: T } | { ok: false; error: string };
 

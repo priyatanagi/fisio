@@ -117,4 +117,17 @@ describe('listModels', () => {
     await listModels({ provider: 'openai', apiKey: 'key-two' });
     expect(spy).toHaveBeenCalledTimes(2);
   });
+
+  it('never touches process.env, so the same module runs in the browser', async () => {
+    mockFetch({ models: [{ name: 'qwen3:8b' }] });
+    const realProcess = globalThis.process;
+    vi.stubGlobal('process', undefined);
+    try {
+      const result = await listModels({ provider: 'ollama' }, { refresh: true });
+      expect(result.live).toBe(true);
+      expect(result.models[0].id).toBe('qwen3:8b');
+    } finally {
+      vi.stubGlobal('process', realProcess);
+    }
+  });
 });

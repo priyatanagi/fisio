@@ -1,72 +1,63 @@
-import type { AgentEvent } from '../types/agentEvents';
-
-export interface EventPage {
-  events: AgentEvent[];
-  cursor: number;
-}
-
-export async function fetchAgentEvents(
-  runId: string,
-  since: number,
-  signal?: AbortSignal
-): Promise<EventPage> {
-  const response = await fetch(
-    `/api/events?runId=${encodeURIComponent(runId)}&since=${since}`,
-    { signal }
-  );
-  if (!response.ok) return { events: [], cursor: since };
-  const payload = await response.json().catch(() => ({}));
-  return {
-    events: Array.isArray(payload.events) ? payload.events : [],
-    cursor: typeof payload.cursor === 'number' ? payload.cursor : since,
-  };
-}
-
-export interface PollingOptions {
-  runId: string;
-  onEvents: (events: AgentEvent[]) => void;
-  /** Stops the loop; a final flush still runs so trailing events are not lost. */
-  signal?: AbortSignal;
-  intervalMs?: number;
-  since?: number;
-}
-
 /**
- * Pulls the server's buffered activity for a run. Polling (rather than a socket)
- * keeps the existing plain-fetch pipeline intact while still surfacing events
- * while a provider call is in flight.
+ * Client-side event bus for agent runs. Events arrive from two transports —
+ * NDJSON lines streamed inside the /api/run-agent response, and direct emits
+ * from Ollama runs executing in this browser — and both append here. Ids are
+ * stamped on append, so parallel batch streams that share one runId still get
+ * a single, gap-free numbering.
  */
-export function startAgentEventPolling(options: PollingOptions): () => void {
-  const { runId, onEvents, signal } = options;
-  const intervalMs = options.intervalMs ?? 400;
-  let cursor = options.since ?? 0;
-  let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | null = null;
+import type { AgentEvent, PublishInput } from '../types/agentEvents';
 
-  const stop = () => {
-    stopped = true;
-    if (timer) clearTimeout(timer);
+const MAX_EVENTS_PER_RUN = 400;
+
+interface RunBuffer {
+  events: AgentEvent[];
+  nextId: number;
+}
+
+const runs = new Map<string, RunBuffer>();
+const subscribers = new Map<string, Set<(batch: AgentEvent[]) => void>>();
+
+export function publishLocalEvent(input: PublishInput): AgentEvent {
+  let buffer = runs.get(input.runId);
+  if (!buffer) {
+    buffer = { events: [], nextId: 1 };
+    runs.set(input.runId, buffer);
+  }
+  const event: AgentEvent = { ...input, id: buffer.nextId++, at: Date.now() };
+  buffer.events.push(event);
+  if (buffer.events.length > MAX_EVENTS_PER_RUN) {
+    buffer.events.splice(0, buffer.events.length - MAX_EVENTS_PER_RUN);
+  }
+  const listeners = subscribers.get(input.runId);
+  if (listeners && listeners.size > 0) {
+    for (const notify of listeners) notify([event]);
+  }
+  return event;
+}
+
+export function getAgentEvents(runId: string): AgentEvent[] {
+  return runs.get(runId)?.events.slice() ?? [];
+}
+
+/** Receives only events published after subscribing; returns the stop fn. */
+export function subscribeAgentEvents(
+  runId: string,
+  notify: (batch: AgentEvent[]) => void
+): () => void {
+  let listeners = subscribers.get(runId);
+  if (!listeners) {
+    listeners = new Set();
+    subscribers.set(runId, listeners);
+  }
+  listeners.add(notify);
+  return () => {
+    listeners?.delete(notify);
+    if (listeners && listeners.size === 0) subscribers.delete(runId);
   };
-  signal?.addEventListener('abort', stop);
+}
 
-  const tick = async () => {
-    if (stopped) return;
-    try {
-      const page = await fetchAgentEvents(runId, cursor, signal);
-      if (page.events.length > 0) {
-        cursor = page.cursor;
-        onEvents(page.events);
-      } else if (page.cursor > cursor) {
-        cursor = page.cursor;
-      }
-    } catch {
-      // A dropped poll is not an error worth surfacing; the next tick retries.
-    }
-    if (!stopped && !signal?.aborted) {
-      timer = setTimeout(tick, intervalMs);
-    }
-  };
-
-  void tick();
-  return stop;
+/** Test hook — drops every buffer and subscription. */
+export function resetAgentEvents(): void {
+  runs.clear();
+  subscribers.clear();
 }

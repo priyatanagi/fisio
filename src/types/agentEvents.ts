@@ -44,3 +44,14 @@ export interface AgentEvent {
   usage?: TokenUsage;
   message?: string;
 }
+
+/**
+ * An event as emitted by whoever produced it (server stream or browser run),
+ * before the consumer stamps it with a cursor and timestamp: the id/at fields
+ * are assigned by the client-side event bus on append.
+ */
+export type PublishInput = Pick<AgentEvent, 'runId' | 'type' | 'role'> &
+  Partial<Omit<AgentEvent, 'id' | 'at' | 'runId' | 'type' | 'role'>>;
+
+/** Where emitted events go: an NDJSON line on the server, the local bus in the browser. */
+export type EventEmit = (input: PublishInput) => void;

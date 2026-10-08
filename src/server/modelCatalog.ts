@@ -16,10 +16,21 @@ export interface CatalogRequest {
   apiKey?: string;
 }
 
+/**
+ * The same module runs in the browser, where there is no process.env at all —
+ * every read goes through this so an absent process yields nothing rather than
+ * throwing.
+ */
+function readEnv(name: string): string | undefined {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env;
+  const value = env?.[name];
+  return value?.trim() || undefined;
+}
+
 function envKey(provider: ProviderType): string | undefined {
-  if (provider === 'gemini') return process.env.GEMINI_API_KEY?.trim();
-  if (provider === 'openai') return process.env.OPENAI_API_KEY?.trim();
-  if (provider === 'anthropic') return process.env.ANTHROPIC_API_KEY?.trim();
+  if (provider === 'gemini') return readEnv('GEMINI_API_KEY');
+  if (provider === 'openai') return readEnv('OPENAI_API_KEY');
+  if (provider === 'anthropic') return readEnv('ANTHROPIC_API_KEY');
   return undefined;
 }
 
@@ -41,9 +52,11 @@ function fallback(provider: ProviderType, endpoint: string, error: string): Mode
 function normalizeBaseUrl(provider: ProviderType, baseUrl?: string): string {
   const trimmed = baseUrl?.trim();
   if (trimmed) return trimmed.replace(/\/+$/, '');
-  if (provider === 'openai') return process.env.OPENAI_BASE_URL?.trim().replace(/\/+$/, '') || 'https://api.openai.com/v1';
-  if (provider === 'anthropic') return process.env.ANTHROPIC_BASE_URL?.trim().replace(/\/+$/, '') || 'https://api.anthropic.com/v1';
-  if (provider === 'ollama') return process.env.OLLAMA_BASE_URL?.trim().replace(/\/+$/, '') || 'http://localhost:11434';
+  if (provider === 'openai') return readEnv('OPENAI_BASE_URL')?.replace(/\/+$/, '') || 'https://api.openai.com/v1';
+  if (provider === 'anthropic') return readEnv('ANTHROPIC_BASE_URL')?.replace(/\/+$/, '') || 'https://api.anthropic.com/v1';
+  // Ollama lives on the user's machine; in the browser this is the only
+  // resolution path, since there is no server environment to consult.
+  if (provider === 'ollama') return readEnv('OLLAMA_BASE_URL')?.replace(/\/+$/, '') || 'http://localhost:11434';
   return 'https://generativelanguage.googleapis.com/v1beta';
 }
 

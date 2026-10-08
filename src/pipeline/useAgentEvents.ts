@@ -1,41 +1,25 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AgentEvent } from '../types/agentEvents';
-import { fetchAgentEvents, startAgentEventPolling } from './agentEvents';
+import { subscribeAgentEvents } from './agentEvents';
 
 const MAX_EVENTS = 300;
-/** Trailing events (repair/completed) can land just after the fetch resolves. */
-const FINAL_FLUSH_MS = 700;
 
 /**
- * Live activity for one background run. `runId` changes start a fresh feed;
- * when `active` goes false a last flush captures events still in flight.
+ * Live activity for one background run, fed by the client event bus. The run
+ * itself (server stream or browser Ollama call) publishes into the bus, so
+ * this hook only subscribes — no polling, no final flush, and events that
+ * arrived before the component mounted stay visible via the bus buffer.
  */
 export function useAgentEvents(runId: string | null, active: boolean): AgentEvent[] {
   const [events, setEvents] = useState<AgentEvent[]>([]);
-  const cursorRef = useRef(0);
-
-  const append = useCallback((batch: AgentEvent[]) => {
-    if (batch.length === 0) return;
-    cursorRef.current = Math.max(cursorRef.current, ...batch.map((event) => event.id));
-    setEvents((previous) => [...previous, ...batch].slice(-MAX_EVENTS));
-  }, []);
 
   useEffect(() => {
-    cursorRef.current = 0;
     setEvents([]);
     if (!runId) return;
-    return startAgentEventPolling({ runId, onEvents: append });
-  }, [runId, append]);
-
-  useEffect(() => {
-    if (active || !runId) return;
-    const timer = setTimeout(() => {
-      void fetchAgentEvents(runId, cursorRef.current)
-        .then((page) => append(page.events))
-        .catch(() => {});
-    }, FINAL_FLUSH_MS);
-    return () => clearTimeout(timer);
-  }, [active, runId, append]);
+    return subscribeAgentEvents(runId, (batch) => {
+      setEvents((previous) => [...previous, ...batch].slice(-MAX_EVENTS));
+    });
+  }, [runId]);
 
   return events;
 }

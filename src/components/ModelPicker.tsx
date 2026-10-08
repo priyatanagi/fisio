@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, Loader2, RefreshCw } from 'lucide-react';
 import type { ModelCatalog, ModelInfo, ProviderType } from '../types/provider';
 import { PROVIDER_PRESETS } from '../types/provider';
+import { fetchModelCatalog } from '../pipeline/providerApi';
 import { noAutofillProps } from '../utils/autofillGuard';
 
 export function filterModels(models: ModelInfo[], query: string): ModelInfo[] {
@@ -48,13 +49,10 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
     async (refresh: boolean) => {
       setLoading(true);
       try {
-        const response = await fetch('/api/models', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider, baseUrl, apiKey, refresh }),
-        });
-        const payload = await response.json();
-        if (payload.ok) setCatalog(payload as ModelCatalog);
+        // Ollama is queried directly from the browser; cloud providers go
+        // through the server, which holds their keys.
+        const catalog = await fetchModelCatalog({ provider, baseUrl, apiKey }, refresh);
+        setCatalog(catalog);
       } catch {
         setCatalog(null);
       } finally {

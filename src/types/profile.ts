@@ -110,7 +110,12 @@ export function resolveProfile(
   | 'toneOfVoice'
   | 'defaultCta'
 > {
-  const pick = (value: string, fallback: string) => (value.trim() ? value.trim() : fallback);
+  // Partial profiles reach here from tests and from agent runs that only carry
+  // a subset of the fields, so absent strings fall back instead of crashing.
+  const pick = (value: string | undefined, fallback: string) => {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    return trimmed || fallback;
+  };
   return {
     businessName: pick(profile.businessName, FALLBACK_BRAND.businessName),
     niche: pick(profile.niche, FALLBACK_BRAND.niche),

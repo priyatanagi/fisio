@@ -3,6 +3,7 @@ import { Check } from 'lucide-react';
 import { BrainCircuit, Search, Edit3, ClipboardCheck, Paintbrush } from 'lucide-react';
 import type { AgentRole, MultiAgentConfig, ProviderConfig, ProviderType } from '../types/provider';
 import { PROVIDER_PRESETS as PRESETS } from '../types/provider';
+import { testProviderConnection } from '../pipeline/providerApi';
 import { ModelPicker } from '../components/ModelPicker';
 import { noAutofillProps, noAutofillSecretProps } from '../utils/autofillGuard';
 
@@ -70,25 +71,11 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, 
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await fetch('/api/test-provider', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider: config.provider,
-          model: config.model,
-          apiKey: config.apiKey,
-          baseUrl: config.baseUrl,
-        }),
-      });
-      const data = await res.json();
-      setTestResult(
-        res.ok && data.success
-          ? { ok: true, message: data.message }
-          : { ok: false, message: data.error ?? 'Connection test failed.' }
-      );
-      if (res.ok && data.success) setReloadToken((token) => token + 1);
-    } catch (err) {
-      setTestResult({ ok: false, message: err instanceof Error ? err.message : 'Network error' });
+      // Ollama is tested straight from the browser against the local server;
+      // cloud providers go through the server route.
+      const result = await testProviderConnection(config);
+      setTestResult(result);
+      if (result.ok) setReloadToken((token) => token + 1);
     } finally {
       setTesting(false);
     }
@@ -148,6 +135,55 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({ multiAgentConfig, 
               </button>
             ))}
           </div>
+
+          {config.provider === 'ollama' && (
+            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4 text-[11px] leading-relaxed text-zinc-400 space-y-2">
+              <p className="font-semibold text-zinc-200">
+                Ollama runs from your browser, not the server
+              </p>
+              <ol className="list-decimal list-inside space-y-1.5">
+                <li>
+                  Start the local server: <code className="text-zinc-200">ollama serve</code>{' '}
+                  (port 11434).
+                </li>
+                <li>
+                  Pull a model, e.g.{' '}
+                  <code className="text-zinc-200">ollama pull {config.model || 'gemma4:e4b'}</code>.
+                </li>
+                <li>
+                  Allow this site before serving — Ollama rejects HTTPS origins by default. Set{' '}
+                  <code className="text-zinc-200">OLLAMA_ORIGINS</code> to this exact origin
+                  (<code className="text-zinc-200">{window.location.origin}</code>):
+                  <span className="block mt-1 space-y-0.5">
+                    <span className="block">
+                      Windows:{' '}
+                      <code className="text-zinc-200">
+                        setx OLLAMA_ORIGINS "{window.location.origin}"
+                      </code>{' '}
+                      (then restart Ollama)
+                    </span>
+                    <span className="block">
+                      macOS:{' '}
+                      <code className="text-zinc-200">
+                        launchctl setenv OLLAMA_ORIGINS "{window.location.origin}"
+                      </code>
+                    </span>
+                    <span className="block">
+                      Linux:{' '}
+                      <code className="text-zinc-200">
+                        OLLAMA_ORIGINS="{window.location.origin}" ollama serve
+                      </code>
+                    </span>
+                  </span>
+                </li>
+                <li>Press "Test" below — it queries your local server directly.</li>
+              </ol>
+              <p className="text-amber-400/80">
+                Prefer this specific origin over <code className="text-amber-400/80">*</code>: a
+                wildcard lets any website reach your Ollama server.
+              </p>
+            </div>
+          )}
 
           <ModelPicker
             provider={config.provider}

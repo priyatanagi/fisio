@@ -16,7 +16,7 @@ export function buildBrandBlock(profile: UserProfile): string {
     `Tone of voice: ${brand.toneOfVoice}`,
     `Default call to action: ${brand.defaultCta}`,
   ];
-  if (profile.exclusions.length > 0) {
+  if ((profile.exclusions ?? []).length > 0) {
     lines.push('', 'SEARCH EXCLUSIONS (must be respected):');
     for (const rule of profile.exclusions) lines.push(`- ${rule}`);
   }

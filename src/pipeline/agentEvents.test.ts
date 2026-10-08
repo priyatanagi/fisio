@@ -1,52 +1,71 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { startAgentEventPolling } from './agentEvents';
+import { beforeEach, describe, expect, it } from 'vitest';
+import {
+  getAgentEvents,
+  publishLocalEvent,
+  resetAgentEvents,
+  subscribeAgentEvents,
+} from './agentEvents';
 import type { AgentEvent } from '../types/agentEvents';
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
-});
+beforeEach(() => resetAgentEvents());
 
-function makeEvent(id: number, role = 'creator'): AgentEvent {
-  return { id, runId: 'run_1', at: Date.now(), type: 'call-start', role, model: 'gpt-4o' };
-}
-
-describe('startAgentEventPolling', () => {
-  it('delivers only new events and advances the cursor', async () => {
-    let page = 0;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => {
-        page += 1;
-        const events = page === 1 ? [makeEvent(1), makeEvent(2)] : page === 2 ? [makeEvent(3)] : [];
-        return { ok: true, json: async () => ({ ok: true, events, cursor: page * 3 }) };
-      })
-    );
-
-    const seen: AgentEvent[] = [];
-    const stop = startAgentEventPolling({
-      runId: 'run_1',
-      onEvents: (batch) => seen.push(...batch),
-      intervalMs: 5,
-    });
-
-    await vi.waitFor(() => expect(seen).toHaveLength(3));
-    stop();
-    const count = seen.length;
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(seen).toHaveLength(count);
+describe('client event bus', () => {
+  it('stamps an id and timestamp when an event is appended', () => {
+    const event = publishLocalEvent({ runId: 'r1', role: 'creator', type: 'call-start' });
+    expect(event.id).toBe(1);
+    expect(typeof event.at).toBe('number');
+    expect(getAgentEvents('r1')).toHaveLength(1);
   });
 
-  it('stops quietly when the run is aborted', async () => {
-    const fetchSpy = vi.fn(async () => ({ ok: true, json: async () => ({ events: [], cursor: 0 }) }));
-    vi.stubGlobal('fetch', fetchSpy);
+  it('assigns strictly increasing ids within a run', () => {
+    const ids = [1, 2, 3].map(
+      (n) => publishLocalEvent({ runId: 'r1', role: 'creator', type: 'attempt', attempt: n }).id
+    );
+    expect(ids).toEqual([1, 2, 3]);
+  });
 
-    const controller = new AbortController();
-    startAgentEventPolling({ runId: 'run_1', onEvents: () => {}, signal: controller.signal, intervalMs: 5 });
-    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled());
-    controller.abort();
-    const calls = fetchSpy.mock.calls.length;
-    await new Promise((resolve) => setTimeout(resolve, 40));
-    expect(fetchSpy).toHaveBeenCalledTimes(calls);
+  it('keeps ids unique when concurrent streams write the same run', () => {
+    // A batch fans out several run-agent requests that share one runId; every
+    // stream appends into the same buffer, so no two events may collide.
+    const first = publishLocalEvent({ runId: 'job', role: 'creator', type: 'call-start' });
+    const second = publishLocalEvent({ runId: 'job', role: 'designer', type: 'call-start' });
+    const third = publishLocalEvent({ runId: 'job', role: 'reviewer', type: 'completed' });
+    expect(new Set([first.id, second.id, third.id]).size).toBe(3);
+  });
+
+  it('isolates runs from each other', () => {
+    publishLocalEvent({ runId: 'job_1', role: 'creator', type: 'call-start' });
+    publishLocalEvent({ runId: 'job_2', role: 'creator', type: 'call-start' });
+    publishLocalEvent({ runId: 'job_2', role: 'creator', type: 'completed' });
+    expect(getAgentEvents('job_1')).toHaveLength(1);
+    expect(getAgentEvents('job_2')).toHaveLength(2);
+  });
+
+  it('notifies subscribers with only the new events', () => {
+    publishLocalEvent({ runId: 'r1', role: 'creator', type: 'call-start' });
+    const batches: AgentEvent[][] = [];
+    const stop = subscribeAgentEvents('r1', (batch) => batches.push(batch));
+
+    publishLocalEvent({ runId: 'r1', role: 'creator', type: 'completed' });
+    expect(batches).toHaveLength(1);
+    expect(batches[0].map((e) => e.type)).toEqual(['completed']);
+
+    stop();
+    publishLocalEvent({ runId: 'r1', role: 'creator', type: 'call-start' });
+    expect(batches).toHaveLength(1);
+  });
+
+  it('caps the retained buffer per run without reusing ids', () => {
+    for (let i = 0; i < 450; i++) {
+      publishLocalEvent({ runId: 'r1', role: 'creator', type: 'attempt', attempt: i });
+    }
+    expect(getAgentEvents('r1')).toHaveLength(400);
+    const next = publishLocalEvent({ runId: 'r1', role: 'creator', type: 'completed' });
+    expect(next.id).toBe(451);
+    expect(getAgentEvents('r1')).toHaveLength(400);
+  });
+
+  it('returns an empty list for a run nobody has published', () => {
+    expect(getAgentEvents('nope')).toEqual([]);
   });
 });
