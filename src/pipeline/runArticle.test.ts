@@ -536,6 +536,40 @@ describe('JSON package', () => {
     );
     expect(result.article!.formats['json-id']).toBeUndefined();
   });
+
+  it('renders a body for a run that checked nothing but the package', async () => {
+    const result = await run(
+      { targetFormats: ['json-en'], languages: ['en'] },
+      {
+        creator: () => ({ markdownContent: markdown }),
+        designer: () => ({ html, warnings: [] }),
+      }
+    );
+    expect(calls.designer).toBe(1);
+    expect(Object.keys(result.article!.formats)).toEqual(['json-en']);
+    expect(JSON.parse(result.article!.formats['json-en']!).body).toBe('<p>Body</p>');
+    // The body render was never a checked format, so it stays out of the mirrors
+    // the export and the format picker read.
+    expect(result.article!.cleanHtml).toBe('');
+    expect(result.article!.inlineCssHtml).toBe('');
+  });
+
+  it('renders one body per language when only packages were checked', async () => {
+    const result = await run(
+      { targetFormats: ['json-en', 'json-id'], languages: ['en', 'id'] },
+      {
+        creator: () => ({ markdownContent: markdown }),
+        designer: (input: any) => ({
+          html: `<article><p>${input.language}</p></article>`,
+          warnings: [],
+        }),
+      }
+    );
+    expect(calls.designer).toBe(2);
+    expect(Object.keys(result.article!.formats).sort()).toEqual(['json-en', 'json-id']);
+    expect(JSON.parse(result.article!.formats['json-en']!).body).toBe('<p>en</p>');
+    expect(JSON.parse(result.article!.formats['json-id']!).body).toBe('<p>id</p>');
+  });
 });
 
 describe('failure handling', () => {

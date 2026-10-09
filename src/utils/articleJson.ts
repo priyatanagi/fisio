@@ -97,6 +97,22 @@ function bodySourceForLanguage(formats: FormatsBundle, language: 'en' | 'id'): s
   return formats[`clean-${language}`] || formats[`inline-${language}`] || '';
 }
 
+/** True when the bundle carries an HTML format for the language, empty or not. */
+function hasHtmlSlot(formats: FormatsBundle, language: 'en' | 'id'): boolean {
+  return `clean-${language}` in formats || `inline-${language}` in formats;
+}
+
+export interface SyncJsonExtras {
+  categoryFallback?: string;
+  keywordFallback?: string[];
+  /**
+   * Markup rendered for a package body alone, by a run that checked a JSON
+   * format and no HTML one for that language. It is not a format the reader
+   * asked for, so it never enters the bundle.
+   */
+  bodyHtml?: Partial<Record<'en' | 'id', string>>;
+}
+
 /**
  * Rebuild every JSON format already in the bundle from the HTML and metadata now
  * in play. The package is a projection of those two, so editing the SEO title or
@@ -107,17 +123,32 @@ export function syncJsonFormats(
   formats: FormatsBundle,
   metadata: SeoMetadata,
   generatedAt: string,
-  extras: { categoryFallback?: string; keywordFallback?: string[] } = {}
+  extras: SyncJsonExtras = {}
 ): FormatsBundle {
+  const { bodyHtml: bodyByLanguage, ...fallbacks } = extras;
   const next: FormatsBundle = { ...formats };
   for (const id of Object.keys(formats) as OutputFormatId[]) {
     if (!isJsonFormat(id)) continue;
-    const bodyHtml = bodySourceForLanguage(formats, jsonLanguage(id));
+    const language = jsonLanguage(id);
+    const bodyHtml =
+      bodySourceForLanguage(formats, language) || bodyByLanguage?.[language] || '';
+
     if (!bodyHtml.trim()) {
-      delete next[id];
+      // A bundle with no HTML format for the language holds a body that was
+      // rendered for the package alone. That body exists nowhere else, so the
+      // package keeps it and only its metadata moves: dropping it would empty
+      // the one format the reader asked for. A language whose HTML slot is
+      // present but blank really did render nothing, and still drops.
+      const kept = hasHtmlSlot(formats, language) ? '' : jsonPackageBody(formats[id] ?? '');
+      if (!kept.trim()) {
+        delete next[id];
+        continue;
+      }
+      next[id] = serializeArticleJson({ metadata, generatedAt, bodyHtml: kept, ...fallbacks });
       continue;
     }
-    next[id] = serializeArticleJson({ metadata, generatedAt, bodyHtml, ...extras });
+
+    next[id] = serializeArticleJson({ metadata, generatedAt, bodyHtml, ...fallbacks });
   }
   return next;
 }

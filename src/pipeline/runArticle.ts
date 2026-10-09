@@ -23,7 +23,7 @@ import { runAgent, AgentError } from './runAgent';
 import { extractDocument } from '../utils/document';
 import { readabilityFromText } from '../utils/readability';
 import { normalizeRenderedHtml } from '../utils/articleShell';
-import { isJsonFormat, syncJsonFormats } from '../utils/articleJson';
+import { isJsonFormat, jsonLanguage, syncJsonFormats } from '../utils/articleJson';
 import { seedMetadataVersions } from '../utils/metadataVersions';
 import { scoreDraft, type ArticleScore } from './scoreArticle';
 
@@ -205,10 +205,22 @@ async function runDesignerStage(
   const call = makeCall(options);
 
   onStage('designing', 'Rendering HTML formats...');
+  const requested = formatTargets(config.targetFormats, config.languages);
   // The JSON package is assembled from the metadata and the rendered body, so it
-  // is not a Designer target; buildArticle adds it once both exist.
-  const targets = formatTargets(config.targetFormats, config.languages).filter(
-    (target) => !isJsonFormat(target.id)
+  // is not a Designer target; buildArticle adds it once both exist. A run that
+  // checked only a package still owes that body a render, or there is nothing to
+  // assemble and the results panel opens on an article it cannot show or export.
+  const targets = requested.filter((target) => !isJsonFormat(target.id));
+  const renderedLanguages = new Set(targets.map((target) => target.language));
+  const bodyOnlyTargets = requested
+    .filter((target) => isJsonFormat(target.id) && !renderedLanguages.has(jsonLanguage(target.id)))
+    .map((target) => ({
+      id: `clean-${target.language}` as OutputFormatId,
+      language: target.language,
+      cssMode: 'clean' as CssMode,
+    }));
+  const bodyOnlyLanguages = new Map<string, TargetLanguage>(
+    bodyOnlyTargets.map((target): [string, TargetLanguage] => [target.id, target.language])
   );
 
   // The languages are generated independently, so they drift: one ships a header
@@ -217,7 +229,7 @@ async function runDesignerStage(
   // for the rest, which is why a mode renders its languages in order rather
   // than in parallel. Modes are independent, so they still run concurrently.
   const byMode = new Map<CssMode, typeof targets>();
-  for (const target of targets) {
+  for (const target of [...targets, ...bodyOnlyTargets]) {
     const group = byMode.get(target.cssMode) ?? [];
     group.push(target);
     byMode.set(target.cssMode, group);
@@ -254,9 +266,15 @@ async function runDesignerStage(
   );
 
   const formatsBundle: Record<string, string> = {};
+  const packageBodies: Partial<Record<TargetLanguage, string>> = {};
   const allWarnings: BrandWarning[] = [];
   for (const r of rendered.flat()) {
-    formatsBundle[r.id] = r.html;
+    // A body-only render feeds the package and stays out of the bundle: the
+    // reader never checked that HTML format, so it must not appear as a result,
+    // a mirror, or a file in the export.
+    const bodyOnlyLanguage = bodyOnlyLanguages.get(r.id);
+    if (bodyOnlyLanguage) packageBodies[bodyOnlyLanguage] = r.html;
+    else formatsBundle[r.id] = r.html;
     allWarnings.push(...r.warnings);
   }
 
@@ -266,6 +284,7 @@ async function runDesignerStage(
     brief: params.brief,
     creator: params.creator,
     formatsBundle,
+    packageBodies,
     warnings: allWarnings,
     report: params.report,
     reviewPassed:
@@ -468,6 +487,8 @@ interface BuildArticleParams {
   brief: ImpowerOutput | null;
   creator: CreatorOutput;
   formatsBundle: Record<string, string>;
+  /** Markup rendered only to give a package its body; not a checked format. */
+  packageBodies?: Partial<Record<TargetLanguage, string>>;
   warnings: BrandWarning[];
   report?: ReviewReport;
   reviewPassed?: boolean;
@@ -546,6 +567,7 @@ function buildArticle(params: BuildArticleParams): GeneratedArticle {
   const formats = syncJsonFormats(bundleWithTargets, metadata, generatedAt, {
     categoryFallback: options.profile.niche,
     keywordFallback: brief?.secondaryKeywords ?? [],
+    bodyHtml: params.packageBodies,
   });
 
   return {

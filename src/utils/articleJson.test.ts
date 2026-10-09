@@ -130,6 +130,47 @@ describe('syncJsonFormats', () => {
     expect(next['json-en']).toBeDefined();
   });
 
+  it('takes a body rendered for the package alone out of the extras', () => {
+    const next = syncJsonFormats(
+      { 'json-en': '' },
+      metadata,
+      GENERATED_AT,
+      { bodyHtml: { en: '<article><p>Body only</p></article>' } }
+    );
+    expect(Object.keys(next)).toEqual(['json-en']);
+    expect(JSON.parse(next['json-en']!).body).toBe('<p>Body only</p>');
+  });
+
+  it('keeps the body of a package no HTML format was checked for', () => {
+    const stored = serializeArticleJson({
+      metadata,
+      generatedAt: GENERATED_AT,
+      bodyHtml: '<p>Body</p>',
+    });
+    const next = syncJsonFormats(
+      { 'json-en': stored },
+      { ...metadata, headline: 'A new headline' },
+      GENERATED_AT
+    );
+    const parsed = JSON.parse(next['json-en']!);
+    expect(parsed.title).toBe('A new headline');
+    expect(parsed.body).toBe('<p>Body</p>');
+  });
+
+  it('still drops a blank package whose language has no HTML format', () => {
+    expect(syncJsonFormats({ 'json-en': '' }, metadata, GENERATED_AT)['json-en']).toBeUndefined();
+  });
+
+  it('drops a package whose HTML format was emptied', () => {
+    const stored = serializeArticleJson({
+      metadata,
+      generatedAt: GENERATED_AT,
+      bodyHtml: '<p>Body</p>',
+    });
+    const next = syncJsonFormats({ 'inline-en': '', 'json-en': stored }, metadata, GENERATED_AT);
+    expect(next['json-en']).toBeUndefined();
+  });
+
   it('does not touch formats that hold no package', () => {
     const html = { 'inline-en': '<p>x</p>' };
     expect(syncJsonFormats(html, metadata, GENERATED_AT)).toEqual(html);
