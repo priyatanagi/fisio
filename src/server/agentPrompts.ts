@@ -3,7 +3,7 @@ import { resolveProfile } from '../types/profile';
 import { DEFAULT_UNIVERSAL_RULES, type UniversalRules } from '../config/universalRules';
 import { ALL_TOKENS, withTokenDefaults, readToken, type Token } from '../config/designTokens';
 import { validateContrast } from '../config/tokenContrast';
-import type { SeoBrief } from '../pipeline/stages';
+import type { CssMode, SeoBrief } from '../pipeline/stages';
 
 export function buildBrandBlock(profile: UserProfile): string {
   const brand = resolveProfile(profile);
@@ -23,7 +23,8 @@ export function buildBrandBlock(profile: UserProfile): string {
   return lines.join('\n');
 }
 
-export function buildUniversalRulesBlock(rules: UniversalRules): string {
+export function buildUniversalRulesBlock(rules: UniversalRules, cta?: string): string {
+  const invitation = cta?.trim();
   return [
     'UNIVERSAL WRITING AND SEO RULES:',
     `- Target Flesch Reading Ease between ${rules.targetFleschMin} and ${rules.targetFleschMax}.`,
@@ -47,12 +48,17 @@ export function buildUniversalRulesBlock(rules: UniversalRules): string {
     rules.requireFaq
       ? '- Include two or three FAQs as details/summary elements; in clean HTML also emit FAQPage JSON-LD.'
       : '- FAQs are optional.',
+    rules.requireCta
+      ? `- End the article with a call to action: <aside class="cta"> holding one short paragraph and one link. Mark it with the cta class whatever else you do.${
+          invitation ? ` Invite the reader with this offer: "${invitation}".` : ''
+        }`
+      : '- A closing call to action is optional.',
     '- Insert native <figure> and <img> tags in place with src, alt, title, loading="lazy", width, and height.',
     '- Include at least two internal and two external contextual links within the text flow.',
   ].join('\n');
 }
 
-export function buildDesignTokenBlock(rules: DesignRules): string {
+export function buildDesignTokenBlock(rules: DesignRules, cssMode: CssMode = 'inline'): string {
   const r = withTokenDefaults(rules);
   const t = (key: string) =>
     readToken(r, { key, label: key, hint: '', fallback: '', kind: 'choice' } as Token);
@@ -93,8 +99,17 @@ export function buildDesignTokenBlock(rules: DesignRules): string {
           .join(', ')}.`
       : 'CONTRAST: keep all body text at or above 4.5:1 against the background.',
     '',
-    'Apply every element style above as a concrete CSS decision, written as inline `style`',
-    'declarations on the element itself. Do not rely on classes or an external stylesheet.',
+    ...(cssMode === 'inline'
+      ? [
+          'Apply every element style above as a concrete CSS decision, written as inline `style`',
+          'declarations on the element itself. Do not rely on classes or an external stylesheet.',
+        ]
+      : [
+          'Apply every element style above as rules in the document stylesheet. Set font-family,',
+          'colour and line-height on the element selectors themselves (article, p, h1-h6, a) — a value',
+          'declared only on :root styles nothing, and a heading that inherits a body font is a defect.',
+          'Do not use style attributes in this mode.',
+        ]),
     'Any Custom CSS entries are user-authored declarations; apply them to the named component.',
   ].join('\n');
 }
@@ -160,7 +175,7 @@ export function buildImpowerPrompt(
   return `You are Impower: an SEO strategist who produces the content brief an article will be written from.
 
 ${buildBrandBlock(profile)}
-${buildUniversalRulesBlock(DEFAULT_UNIVERSAL_RULES)}
+${buildUniversalRulesBlock(DEFAULT_UNIVERSAL_RULES, resolveProfile(profile).defaultCta)}
 
 TOPIC: "${input.topic}"
 ${sourceTopic}${pinnedKeyword}TARGET LENGTH: ~${input.targetWords} words
@@ -182,7 +197,8 @@ Respond with ONLY this JSON shape:
   "outline": [{ "heading": "H2 text", "mustCover": ["what this section must include"] }],
   "faqPlan": [{ "question": "...", "answerShape": "what the answer should cover" }],
   "statPlan": ["specific authoritative figures to cite"],
-  "internalLinkTargets": ["suggested internal link anchors"]
+  "internalLinkTargets": ["suggested internal link anchors"],
+  "cta": { "heading": "short H2 for the closing invitation", "offer": "one line asking the reader to act, built from the brand's default call to action" }
 }`;
 }
 
@@ -203,7 +219,7 @@ export function buildCreatorPrompt(
     : '';
   const selfPlan = input.brief
     ? ''
-    : '\nNo brief was supplied, so plan it yourself. After the markdown, emit a "selfPlanned" object with the same keys as the brief: seoMetadata, secondaryKeywords, outline, faqPlan, statPlan, internalLinkTargets.\n';
+    : '\nNo brief was supplied, so plan it yourself. After the markdown, emit a "selfPlanned" object with the same keys as the brief: seoMetadata, secondaryKeywords, outline, faqPlan, statPlan, internalLinkTargets, cta.\n';
   const tone = input.toneOverride?.trim()
     ? `\nTONE OVERRIDE for this article: ${input.toneOverride.trim()}\n`
     : '';
@@ -212,7 +228,7 @@ export function buildCreatorPrompt(
     : '';
   const shape = input.brief
     ? '{ "markdownContent": "# First section\\n\\nFull article markdown..." }'
-    : '{ "markdownContent": "# First section\\n\\nFull article markdown...", "selfPlanned": { "seoMetadata": {}, "secondaryKeywords": [], "outline": [], "faqPlan": [], "statPlan": [], "internalLinkTargets": [] } }';
+    : '{ "markdownContent": "# First section\\n\\nFull article markdown...", "selfPlanned": { "seoMetadata": {}, "secondaryKeywords": [], "outline": [], "faqPlan": [], "statPlan": [], "internalLinkTargets": [], "cta": {} } }';
 
   const sourceTopic =
     input.originalTopic?.trim() && input.originalTopic.trim() !== input.seedTopic.trim()
@@ -233,7 +249,7 @@ export function buildCreatorPrompt(
 
 ${buildBrandBlock(profile)}
 ${contentStyle}
-${buildUniversalRulesBlock(DEFAULT_UNIVERSAL_RULES)}
+${buildUniversalRulesBlock(DEFAULT_UNIVERSAL_RULES, resolveProfile(profile).defaultCta)}
 
 TOPIC: "${input.seedTopic}"
 ${sourceTopic}${pinnedKeyword}TARGET LENGTH: ~${input.targetWords} words
@@ -311,7 +327,7 @@ export function buildImproverPrompt(input: ImproverInput, profile: UserProfile):
   return `You are the Improver: a front-end developer repairing one rendered article.
 
 ${buildBrandBlock(profile)}
-${buildDesignTokenBlock(profile.designRules)}
+${buildDesignTokenBlock(profile.designRules, input.cssMode)}
 
 ARTICLE TOPIC: "${input.topic}"
 FOCUS KEYPHRASE: "${input.focusKeyphrase ?? '(none)'}"
@@ -382,7 +398,7 @@ export function buildDesignerPrompt(
   return `You are the Designer: a front-end developer converting Markdown into publish-ready HTML.
 
 ${buildBrandBlock(profile)}
-${buildDesignTokenBlock(profile.designRules)}
+${buildDesignTokenBlock(profile.designRules, input.cssMode)}
 
 TARGET LANGUAGE: ${langName}. Write all visible text, headings and metadata natively in this language.
 CSS MODE: ${input.cssMode.toUpperCase()}
@@ -390,6 +406,7 @@ CSS MODE: ${input.cssMode.toUpperCase()}
 RULES:
 ${modeRules}
 - Preserve all content, headings, lists and structure exactly as written.
+- Keep the closing call-to-action block and give it class="cta": that class is how the brand stylesheet styles it and how the article is checked for one.
 - Never introduce a colour that is not in the brand design tokens above.
 - The article fills the width of the container, and text components fill the available content width. Never set width or max-width in ch units on paragraphs or other text components. Never set max-width, width or margin on the <article>, <body> or <main> element.
 - Never paint a page background. Set no background, background-color or background-image on the <article>, <body> or <main> element: the host page provides the surface, and it must show through. The background colour token is only for components inside the article, such as callouts, table headers and FAQ cards.

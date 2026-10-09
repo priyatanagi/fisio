@@ -291,6 +291,18 @@ describe('applyTokenCss', () => {
     expect((twice.match(/<style>/g) ?? []).length).toBe(1);
   });
 
+  it('lets the brand sheet outrank a stylesheet the model wrote', () => {
+    const authored =
+      '<style>:root{--body-font: Georgia, serif} p{font-family: Georgia, serif}</style>' +
+      '<article><p>x</p></article>';
+    const { html, touched } = applyTokenCss(authored, base, { mode: 'clean' });
+    expect(touched).toBeGreaterThan(0);
+    expect((html.match(/<style>/g) ?? []).length).toBe(2);
+    // Last sheet wins for element rules of equal specificity.
+    expect(html.indexOf(base.bodyFont)).toBeGreaterThan(html.indexOf('Georgia'));
+    expect(applyTokenCss(html, base, { mode: 'clean' }).html).toBe(html);
+  });
+
   it('makes compliance pass after enforcement', () => {
     const offBrand = '<blockquote style="color:#abcdef">q</blockquote>';
     expect(verifyTokenCompliance(offBrand, base).issues.length).toBeGreaterThan(0);

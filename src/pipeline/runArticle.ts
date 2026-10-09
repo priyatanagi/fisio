@@ -18,12 +18,12 @@ import type {
 } from './stages';
 import { resolveBrief } from './seoBrief';
 import { rulesForFormat } from '../config/brandPresets';
+import { applyTokenCss } from '../config/tokenCss';
 import { resolveTopicForRun } from './topicFidelity';
 import { runAgent, AgentError } from './runAgent';
 import { extractDocument } from '../utils/document';
 import { readabilityFromText } from '../utils/readability';
 import { normalizeRenderedHtml } from '../utils/articleShell';
-import { isJsonFormat, jsonLanguage, syncJsonFormats } from '../utils/articleJson';
 import { seedMetadataVersions } from '../utils/metadataVersions';
 import { scoreDraft, type ArticleScore } from './scoreArticle';
 
@@ -205,23 +205,7 @@ async function runDesignerStage(
   const call = makeCall(options);
 
   onStage('designing', 'Rendering HTML formats...');
-  const requested = formatTargets(config.targetFormats, config.languages);
-  // The JSON package is assembled from the metadata and the rendered body, so it
-  // is not a Designer target; buildArticle adds it once both exist. A run that
-  // checked only a package still owes that body a render, or there is nothing to
-  // assemble and the results panel opens on an article it cannot show or export.
-  const targets = requested.filter((target) => !isJsonFormat(target.id));
-  const renderedLanguages = new Set(targets.map((target) => target.language));
-  const bodyOnlyTargets = requested
-    .filter((target) => isJsonFormat(target.id) && !renderedLanguages.has(jsonLanguage(target.id)))
-    .map((target) => ({
-      id: `clean-${target.language}` as OutputFormatId,
-      language: target.language,
-      cssMode: 'clean' as CssMode,
-    }));
-  const bodyOnlyLanguages = new Map<string, TargetLanguage>(
-    bodyOnlyTargets.map((target): [string, TargetLanguage] => [target.id, target.language])
-  );
+  const targets = formatTargets(config.targetFormats, config.languages);
 
   // The languages are generated independently, so they drift: one ships a header
   // block and a centred H1 the other has no styling for at all. Within a CSS
@@ -229,7 +213,7 @@ async function runDesignerStage(
   // for the rest, which is why a mode renders its languages in order rather
   // than in parallel. Modes are independent, so they still run concurrently.
   const byMode = new Map<CssMode, typeof targets>();
-  for (const target of [...targets, ...bodyOnlyTargets]) {
+  for (const target of targets) {
     const group = byMode.get(target.cssMode) ?? [];
     group.push(target);
     byMode.set(target.cssMode, group);
@@ -242,22 +226,25 @@ async function runDesignerStage(
       const results: { id: string; html: string; warnings: BrandWarning[] }[] = [];
       for (const target of group) {
         const reference = results[0]?.html;
+        const rules = rulesForFormat(
+          options.profile.designRules,
+          options.profile.formatOverrides ?? {},
+          target.id
+        );
         const output = await call('designer', {
           markdown: params.creator.markdownContent,
           language: target.language,
           cssMode: target.cssMode,
           referenceHtml: reference,
-        }, {
-          ...options.profile,
-          designRules: rulesForFormat(
-            options.profile.designRules,
-            options.profile.formatOverrides ?? {},
-            target.id
-          ),
-        });
+        }, { ...options.profile, designRules: rules });
+        // The shell rules keep the document publishable; the token pass makes the
+        // brand's typography and palette final, so a render that guessed its own
+        // typeface cannot ship one.
         results.push({
           id: target.id,
-          html: normalizeRenderedHtml(output?.html ?? '', reference),
+          html: applyTokenCss(normalizeRenderedHtml(output?.html ?? '', reference), rules, {
+            mode: target.cssMode,
+          }).html,
           warnings: output?.warnings ?? [],
         });
       }
@@ -266,15 +253,9 @@ async function runDesignerStage(
   );
 
   const formatsBundle: Record<string, string> = {};
-  const packageBodies: Partial<Record<TargetLanguage, string>> = {};
   const allWarnings: BrandWarning[] = [];
   for (const r of rendered.flat()) {
-    // A body-only render feeds the package and stays out of the bundle: the
-    // reader never checked that HTML format, so it must not appear as a result,
-    // a mirror, or a file in the export.
-    const bodyOnlyLanguage = bodyOnlyLanguages.get(r.id);
-    if (bodyOnlyLanguage) packageBodies[bodyOnlyLanguage] = r.html;
-    else formatsBundle[r.id] = r.html;
+    formatsBundle[r.id] = r.html;
     allWarnings.push(...r.warnings);
   }
 
@@ -284,7 +265,6 @@ async function runDesignerStage(
     brief: params.brief,
     creator: params.creator,
     formatsBundle,
-    packageBodies,
     warnings: allWarnings,
     report: params.report,
     reviewPassed:
@@ -487,8 +467,6 @@ interface BuildArticleParams {
   brief: ImpowerOutput | null;
   creator: CreatorOutput;
   formatsBundle: Record<string, string>;
-  /** Markup rendered only to give a package its body; not a checked format. */
-  packageBodies?: Partial<Record<TargetLanguage, string>>;
   warnings: BrandWarning[];
   report?: ReviewReport;
   reviewPassed?: boolean;
@@ -557,19 +535,6 @@ function buildArticle(params: BuildArticleParams): GeneratedArticle {
 
   const generatedAt = new Date().toISOString();
 
-  // A JSON package is assembled, not rendered: the metadata this run resolved
-  // plus the body of the language it names. Sizing the keys up front lets
-  // syncJsonFormats drop a package whose language rendered no HTML.
-  const bundleWithTargets: Record<string, string> = { ...formatsBundle };
-  for (const target of formatTargets(options.config.targetFormats, options.config.languages)) {
-    if (isJsonFormat(target.id)) bundleWithTargets[target.id] ??= '';
-  }
-  const formats = syncJsonFormats(bundleWithTargets, metadata, generatedAt, {
-    categoryFallback: options.profile.niche,
-    keywordFallback: brief?.secondaryKeywords ?? [],
-    bodyHtml: params.packageBodies,
-  });
-
   return {
     id: params.articleId ?? `art_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     topic: refinedTopic,
@@ -579,7 +544,7 @@ function buildArticle(params: BuildArticleParams): GeneratedArticle {
     lengthTarget: options.config.lengthTarget ?? 'custom',
     targetWordCount: options.config.targetWords,
     targetFormats: options.config.targetFormats,
-    formats: formats as GeneratedArticle['formats'],
+    formats: formatsBundle as GeneratedArticle['formats'],
     seoMetadata: metadata,
     seoMetadataEn: options.config.languages.includes('en') ? metadata : undefined,
     seoMetadataId: options.config.languages.includes('id') ? metadata : undefined,

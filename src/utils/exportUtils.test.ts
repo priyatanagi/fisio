@@ -39,17 +39,58 @@ describe('buildArticleFolder', () => {
     expect(names).toContain('treadmill-guide-clean-en.html');
   });
 
-  it('includes a JSON package as a .json file', () => {
+  it('derives a JSON package per language from the markup it exports', () => {
     const files = buildArticleFolder(
       article({
         formats: {
-          ...article().formats,
-          'json-en': JSON.stringify({ title: 'Treadmill guide', body: '<p>Body</p>' }),
+          'inline-en': '<article><h1>EN</h1><p>English body</p></article>',
+          'inline-id': '<article><h1>ID</h1><p>Body Indonesia</p></article>',
+        },
+        // No clean render, so each package is built on the inline markup.
+        cleanHtml: '',
+        secondaryKeywords: 'treadmill price, gym equipment',
+        profileSnapshot: { niche: 'Gym Planning' } as GeneratedArticle['profileSnapshot'],
+      })
+    );
+    const en = JSON.parse(files.find((f) => f.name === 'treadmill-guide-json-en.json')!.content);
+    const id = JSON.parse(files.find((f) => f.name === 'treadmill-guide-json-id.json')!.content);
+
+    expect(en.body).toBe('<p>English body</p>');
+    expect(id.body).toBe('<p>Body Indonesia</p>');
+    expect(en.category).toBe('Gym Planning');
+    // The Indonesian form has no field for slug, category, date or keywords, so
+    // a package naming them would have the CMS drop them.
+    expect(Object.keys(id)).toEqual(['title', 'excerpt', 'tags', 'meta', 'body']);
+    expect(Object.keys(en)).toEqual([
+      'title',
+      'slug',
+      'category',
+      'date',
+      'excerpt',
+      'tags',
+      'keywords',
+      'meta',
+      'body',
+    ]);
+  });
+
+  it('packages the clean render and ships none for a language without HTML', () => {
+    // Long enough that the clean render counts as complete and ships as it is.
+    const cleanEn =
+      '<article><p>Commercial treadmills are built around a welded steel frame, a serviceable ' +
+      'motor and a belt wide enough for a natural stride, which is what keeps a busy facility ' +
+      'running.</p></article>';
+    const files = buildArticleFolder(
+      article({
+        formats: {
+          'inline-en': '<article><p>Inline body the package should not use</p></article>',
+          'clean-en': cleanEn,
         },
       })
     );
-    const pkg = files.find((f) => f.name === 'treadmill-guide-json-en.json');
-    expect(JSON.parse(pkg!.content)).toHaveProperty('title', 'Treadmill guide');
+    const en = JSON.parse(files.find((f) => f.name === 'treadmill-guide-json-en.json')!.content);
+    expect(en.body).toContain('welded steel frame');
+    expect(files.some((f) => f.name === 'treadmill-guide-json-id.json')).toBe(false);
   });
 
   it('includes a metadata summary', () => {

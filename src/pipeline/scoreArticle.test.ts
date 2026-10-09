@@ -84,6 +84,8 @@ Tenaga dapur perlu dilatih setiap tahun. Pembelian bahan harus dilakukan lebih a
 Orang tua cukup memberi tahu sekolah jika ada anak yang sedang sakit. Anak yang sakit itu tidak dihitung sebagai penerima pada hari tersebut. Orang tua tidak perlu menyiapkan makan di rumah pada hari sekolah.
 
 Sekolah mencatat kehadiran setiap pagi, sebelum makanan dibagikan. Data ini dipakai untuk menghitung jumlah porsi pada hari itu. Orang tua bisa bertanya kepada wali kelas jika ada yang berbeda.
+
+Pemilik dapur dapat meminta [penawaran resmi](https://example.org/penawaran) lewat portal dinas. Balasan dikirim dalam tiga hari kerja.
 `;
 
 const poor = `# Judul
@@ -119,6 +121,8 @@ The district pays for the ingredients and for the kitchen staff, so the school i
 Parents only need to inform the teacher when a child is unwell or away for the day. They never need to prepare food from home, and they never need to buy a ticket or pay a small fee. Any question about a meal is directed to the class teacher, who then checks with the kitchen team the same day.
 
 The school also keeps a written record of every serving day, and that record is available to any parent who wants to inspect it. If a meal is ever late, the teacher tells the kitchen manager and the kitchen adjusts its timing for the following day.
+
+Equipment suppliers can request an [official quote](https://example.org/quote) through the district portal. Replies arrive within three working days.
 `;
 
 /** Formal vocabulary, so the corpus ceiling lands inside the band rather than far above it. */
@@ -152,9 +156,9 @@ describe('scoreDraft', () => {
     expect(other.flesch).not.toBe(score.flesch);
   });
 
-  it('counts exactly 16 checks', () => {
+  it('counts exactly 17 checks', () => {
     const score = scoreDraft(compliant, metadata, 'makan bergizi gratis', 900, 'id', 85);
-    expect(score.checks).toHaveLength(16);
+    expect(score.checks).toHaveLength(17);
     expect(score.checks.map((c) => c.id)).toContain('flesch_range');
     expect(score.checks.map((c) => c.id)).toContain('word_count_band');
   });
@@ -183,10 +187,10 @@ describe('scoreDraft', () => {
     expect(scoreDraft(poor, metadata, 'makan bergizi gratis', 900, 'id', 5).passed).toBe(true);
   });
 
-  it('reaches 16 of 16 on a draft that satisfies every check', () => {
+  it('reaches 17 of 17 on a draft that satisfies every check', () => {
     const score = scoreDraft(compliantEn, englishMetadata, 'school lunch', 500, 'en', 85);
     expect(score.total).toBe(100);
-    expect(score.scoredCount).toBe(16);
+    expect(score.scoredCount).toBe(17);
     expect(score.failed).toHaveLength(0);
     expect(score.checks.filter((c) => c.unavailable)).toHaveLength(0);
   });
@@ -197,10 +201,10 @@ describe('scoreDraft', () => {
     expect(band?.unavailable).toBe(true);
     expect(band?.passed).toBe(false);
     expect(band?.actual).toBe(String(score.flesch));
-    expect(band?.expected).toBe('60-70 is unreachable for this corpus; maximum possible is 14.2');
+    expect(band?.expected).toBe('60-70 is unreachable for this corpus; maximum possible is 14');
     expect(score.checks.filter((c) => c.unavailable)).toHaveLength(1);
-    expect(score.checks.filter((c) => !c.unavailable)).toHaveLength(15);
-    expect(score.scoredCount).toBe(15);
+    expect(score.checks.filter((c) => !c.unavailable)).toHaveLength(16);
+    expect(score.scoredCount).toBe(16);
     expect(score.failed.map((c) => c.id)).not.toContain('flesch_range');
   });
 

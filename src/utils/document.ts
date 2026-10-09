@@ -7,6 +7,7 @@ export interface ArticleDocument {
   linkCount: number;
   hasFaqSignal: boolean;
   hasStrongFigure: boolean;
+  hasCtaSignal: boolean;
 }
 
 /** The opener is captured so the closer must repeat its exact backtick count; $ swallows an unclosed final fence. */
@@ -62,6 +63,27 @@ export function containsStrongFigure(source: string): boolean {
 
 function hasFaqWords(text: string): boolean {
   return FAQ_WORDS.test(text);
+}
+
+/** Wording a closing invitation uses, in the two languages this app writes in. */
+const CTA_INVITATION =
+  /quote|quotation|penawaran|konsultasi|consult|hubungi|contact|get in touch|katalog|catalogue|whatsapp|wa\.me|request/i;
+
+/** The block the brand stylesheet styles and the checklist looks for. */
+const CTA_MARKED = /class="[^"]*\bcta\b[^"]*"/i;
+
+/** A link as HTML or as Markdown, or a button — something the reader can act on. */
+const ACTIONABLE = /<a\b[^>]*href=|\[[^\]]+\]\([^)]+\)|<button\b/i;
+
+/**
+ * A closing call to action: the block marked `class="cta"`, or an invitation the
+ * reader can act on in the final quarter of the article. Both paths call this on
+ * their own raw source, so a draft and its render cannot disagree.
+ */
+export function containsCallToAction(source: string): boolean {
+  if (CTA_MARKED.test(source)) return true;
+  const tail = source.slice(Math.floor(source.length * 0.75));
+  return CTA_INVITATION.test(tail) && ACTIONABLE.test(tail);
 }
 
 /** Strips fenced code, then every markdown marker, keeping prose and link text. */
@@ -227,6 +249,7 @@ export function extractDocument(source: string, kind: 'html' | 'markdown'): Arti
       linkCount: 0,
       hasFaqSignal: hasFaqWords(text),
       hasStrongFigure: containsStrongFigure(source),
+      hasCtaSignal: containsCallToAction(source),
     };
   }
 
@@ -246,5 +269,6 @@ export function extractDocument(source: string, kind: 'html' | 'markdown'): Arti
     hasFaqSignal:
       /<details\b/i.test(html) || hasFaqWords(html) || /application\/ld\+json/i.test(html),
     hasStrongFigure: containsStrongFigure(html),
+    hasCtaSignal: containsCallToAction(html),
   };
 }

@@ -7,6 +7,7 @@ import {
   Code2,
   Eye,
   FileText,
+  FileJson,
   Image as ImageIcon,
   Smartphone,
   Tablet,
@@ -41,14 +42,20 @@ import {
   Lock,
   History,
 } from 'lucide-react';
-import { GeneratedArticle, FormatsBundle, OutputFormatId, SeoMetadata } from '../types/article';
+import { GeneratedArticle, OutputFormatId, SeoMetadata } from '../types/article';
 import type { UserProfile } from '../types/profile';
 import type { MultiAgentConfig } from '../types/provider';
 import { copyToClipboard, downloadFile, downloadAllAsZip } from '../utils/exportUtils';
 import { ReadabilityScorecard } from './ReadabilityScorecard';
 import { SeoChecklistPanel } from './SeoChecklistPanel';
 import { isCleanHtmlIncomplete, synthesizeCleanHtml } from '../utils/cleanHtmlUtils';
-import { isJsonFormat, jsonPackageBody, syncJsonFormats } from '../utils/articleJson';
+import { rulesForFormat } from '../config/brandPresets';
+import { reindentLines } from '../utils/codeIndent';
+import {
+  jsonExportName,
+  serializeArticleJson,
+  type PackageLanguage,
+} from '../utils/articleJson';
 import { improveArticle } from '../pipeline/improveArticle';
 import { normalizeRenderedHtml } from '../utils/articleShell';
 import { scoreHtml } from '../pipeline/scoreHtml';
@@ -104,18 +111,6 @@ const FORMAT_OPTIONS: { id: OutputFormatId; name: string; lang: 'en' | 'id'; des
     name: 'Clean Semantic HTML (Bahasa Indonesia)',
     lang: 'id',
     desc: 'Markup semantik + <style> + <script> • Accordion FAQ interaktif',
-  },
-  {
-    id: 'json-en',
-    name: 'JSON Package (English)',
-    lang: 'en',
-    desc: 'Metadata + body HTML as one JSON object • Headless CMS ready',
-  },
-  {
-    id: 'json-id',
-    name: 'JSON Package (Bahasa Indonesia)',
-    lang: 'id',
-    desc: 'Metadata + body HTML dalam satu objek JSON • Siap headless CMS',
   },
 ];
 
@@ -267,11 +262,14 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
    * Formats this run actually produced. A format that was not checked was never
    * rendered, so it is offered as a locked entry rather than shown as editable:
    * opening one would present an empty editor as though it held a result.
+   *
+   * Keys outside the picker's list are ignored, so an article saved while the
+   * JSON package was still stored as a format opens on its markup instead.
    */
   const generatedFormats = useMemo<OutputFormatId[]>(
     () =>
       (Object.keys(article.formats ?? {}) as OutputFormatId[]).filter(
-        (id) => Boolean(article.formats[id]?.trim())
+        (id) => Boolean(article.formats[id]?.trim()) && FORMAT_OPTIONS.some((f) => f.id === id)
       ),
     [article.formats]
   );
@@ -281,7 +279,13 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
   // so opening the results never lands on a format that was not generated.
   const firstGenerated = generatedFormats[0] ?? 'inline-en';
   const [internalFormat, setInternalFormat] = useState<OutputFormatId>(firstGenerated);
-  const selectedFormat = controlledFormat || internalFormat;
+  // A caller can name a format this article does not hold — an article saved
+  // while the JSON package was still a stored format, for one. Fall back to the
+  // panel's own choice rather than opening an editor on markup it cannot show.
+  const selectedFormat =
+    controlledFormat && generatedFormats.includes(controlledFormat)
+      ? controlledFormat
+      : internalFormat;
 
   const handleSetFormat = (fmt: OutputFormatId) => {
     setInternalFormat(fmt);
@@ -294,6 +298,9 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
 
   // Preview Viewport mode in right panel
   const [viewportMode, setViewportMode] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
+  // Which half of the right panel is up: the rendered page, or the JSON package
+  // the CMS extension takes.
+  const [showJsonPanel, setShowJsonPanel] = useState(false);
   const [formatDropdownOpen, setFormatDropdownOpen] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [isZipping, setIsZipping] = useState(false);
@@ -327,7 +334,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  /** What a JSON package falls back to when a run predates these metadata fields. */
+  /** What the exported JSON package falls back to when a run predates these fields. */
   const packageExtras = useMemo(
     () => ({
       categoryFallback: profile.niche,
@@ -340,20 +347,6 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
   );
 
   /**
-   * Re-derive the JSON packages after a write. A package projects the metadata
-   * plus one language's body, so editing either has to rebuild it rather than
-   * leave a stale copy shipping the old title. The exception is a write that
-   * targets a package itself: what the reader put there is what it holds.
-   */
-  const refreshPackages = useCallback(
-    (formats: FormatsBundle, metadata: SeoMetadata, writtenFormat?: OutputFormatId) =>
-      writtenFormat && isJsonFormat(writtenFormat)
-        ? formats
-        : syncJsonFormats(formats, metadata, article.generatedAt, packageExtras),
-    [article.generatedAt, packageExtras]
-  );
-
-  /**
    * The HTML stored for a format, repaired when a clean render came back
    * truncated. Memoised because it is derived work, not a value.
    */
@@ -361,8 +354,6 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
     // Articles generated before the shell rules existed still carry the grey page
     // background and the width cap. They are normalized on the way in, so opening
     // one shows and edits the corrected document rather than the old artefact.
-    // The JSON package is data rather than markup, so it passes through untouched.
-    if (isJsonFormat(selectedFormat)) return article.formats[selectedFormat] || '';
     const content = normalizeRenderedHtml(article.formats[selectedFormat] || '');
 
     if (selectedFormat === 'clean-en' || selectedFormat === 'clean-id') {
@@ -371,7 +362,8 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
         return synthesizeCleanHtml(
           article.formats[sibling] || article.inlineCssHtml,
           content,
-          article.topic
+          article.topic,
+          rulesForFormat(profile.designRules, profile.formatOverrides ?? {}, selectedFormat)
         );
       }
     }
@@ -386,7 +378,14 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
       return content || normalizeRenderedHtml(article.cleanHtml || '');
     }
     return content;
-  }, [article.formats, article.inlineCssHtml, article.cleanHtml, article.topic, selectedFormat]);
+  }, [
+    article.formats,
+    article.inlineCssHtml,
+    article.cleanHtml,
+    article.topic,
+    selectedFormat,
+    profile,
+  ]);
 
   /**
    * The editor holds its own copy of the document.
@@ -401,30 +400,25 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
   draftRef.current = draft;
 
   // Re-seed the buffer when the reader switches format or article, but never
-  // while they are typing in the one they are on. A package cannot be typed in,
-  // so it mirrors the projection instead: a metadata or HTML edit rebuilds it.
+  // while they are typing in the one they are on.
   useEffect(() => {
     setDraft(storedContent);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedFormat, article.id, isJsonFormat(selectedFormat) ? storedContent : undefined]);
+  }, [selectedFormat, article.id]);
 
   const commitRef = useRef<number | null>(null);
   const persistDraft = useCallback(
     (format: OutputFormatId, content: string) => {
       onUpdateArticle({
         ...article,
-        formats: refreshPackages(
-          { ...article.formats, [format]: content },
-          article.seoMetadata,
-          format
-        ),
+        formats: { ...article.formats, [format]: content },
         // The top-level mirrors name their own language; they are not a fallback
         // for the other one.
         ...(format === 'inline-en' ? { inlineCssHtml: content } : {}),
         ...(format === 'clean-en' ? { cleanHtml: content } : {}),
       });
     },
-    [article, onUpdateArticle, refreshPackages]
+    [article, onUpdateArticle]
   );
 
   /** Debounced write of the buffer to the article, so scoring and export see edits. */
@@ -456,14 +450,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
   };
 
   const currentContent = draft;
-
-  /**
-   * The JSON package holds the article body as data, so the preview, the measured
-   * checks and the plain-text copy read the body out of it instead of scoring a
-   * blob of JSON as markup.
-   */
-  const isPackage = isJsonFormat(selectedFormat);
-  const htmlContent = isPackage ? jsonPackageBody(draft) : draft;
+  const htmlContent = draft;
 
   // Updater for the current format content. Writes immediately, because these
   // are deliberate edits (a toolbar insert, prettify, an AI repair) rather than
@@ -504,7 +491,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
         doc.close();
       }
     }
-  }, [htmlContent, selectedFormat]);
+  }, [htmlContent, selectedFormat, showJsonPanel]);
 
   // Insert HTML Tag at cursor / wrap selected text in code editor
   const insertHtmlTag = (tagOpen: string, tagClose: string = '', defaultPlaceholder: string = '') => {
@@ -567,12 +554,20 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
   // Export active format HTML file
   const handleDownloadFile = () => {
     const slug = metaDraft.urlSlug || 'commercial-fitness-article';
-    downloadFile(
-      `${slug}-${selectedFormat}.${isPackage ? 'json' : 'html'}`,
-      currentContent,
-      isPackage ? 'application/json;charset=utf-8' : 'text/html;charset=utf-8'
-    );
+    downloadFile(`${slug}-${selectedFormat}.html`, currentContent, 'text/html;charset=utf-8');
     showCopyFeedback('download');
+  };
+
+  // Export the package the CMS extension fills its form from: this format's
+  // markup under the metadata on screen. The filename carries the language,
+  // which is how the extension tells an Indonesian package from an English one.
+  const handleDownloadJson = () => {
+    downloadFile(
+      jsonExportName(metaDraft.urlSlug, packageLanguage),
+      articlePackage,
+      'application/json;charset=utf-8'
+    );
+    showCopyFeedback('jsonExport');
   };
 
   // Download all as ZIP
@@ -661,19 +656,36 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [article.id]);
 
+  /**
+   * The package this format exports: the metadata on screen plus this markup
+   * stripped down to its body. Built on screen instead of stored with the
+   * article, so it cannot ship a headline the reader has since changed.
+   */
+  const packageLanguage: PackageLanguage = selectedFormat.endsWith('-id') ? 'id' : 'en';
+  const articlePackage = useMemo(
+    () =>
+      serializeArticleJson({
+        language: packageLanguage,
+        metadata: metaDraft,
+        generatedAt: article.generatedAt,
+        bodyHtml: draft,
+        ...packageExtras,
+      }),
+    [packageLanguage, metaDraft, article.generatedAt, draft, packageExtras]
+  );
+
   const metaCommitRef = useRef<number | null>(null);
   const persistMetadata = useCallback(
     (metadata: SeoMetadata) => {
       onUpdateArticle({
         ...article,
         seoMetadata: metadata,
-        formats: refreshPackages(article.formats, metadata),
         focusKeyphrase: metadata.focusKeyphrase || article.focusKeyphrase,
         seoMetadataEn: article.seoMetadataEn,
         seoMetadataId: article.seoMetadataId,
       });
     },
-    [article, onUpdateArticle, refreshPackages]
+    [article, onUpdateArticle]
   );
 
   const handleMetaChange = (patch: Partial<SeoMetadata>) => {
@@ -717,7 +729,6 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
     onUpdateArticle({
       ...article,
       seoMetadata: metaDraft,
-      formats: refreshPackages(article.formats, metaDraft),
       metadataVersions: next,
     });
     setRestoredFrom(null);
@@ -732,7 +743,6 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
     onUpdateArticle({
       ...article,
       seoMetadata: restored.metadata,
-      formats: refreshPackages(article.formats, restored.metadata),
       focusKeyphrase: restored.metadata.focusKeyphrase || article.focusKeyphrase,
       seoMetadataEn: article.seoMetadataEn,
       seoMetadataId: article.seoMetadataId,
@@ -777,11 +787,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
     });
     onUpdateArticle({
       ...article,
-      formats: refreshPackages(
-        { ...article.formats, [selectedFormat]: html },
-        article.seoMetadata,
-        selectedFormat
-      ),
+      formats: { ...article.formats, [selectedFormat]: html },
       ...(selectedFormat === 'inline-en' ? { inlineCssHtml: html } : {}),
       ...(selectedFormat === 'clean-en' ? { cleanHtml: html } : {}),
       contentVersions: next,
@@ -820,7 +826,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
 
     onUpdateArticle({
       ...article,
-      formats: refreshPackages(formats, article.seoMetadata, restored.format),
+      formats,
       ...mirrorPatch,
       contentVersions: restored.versions,
     });
@@ -1093,8 +1099,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
 
           {/* Quick Actions: AI Improve, Copy Code, Copy Text, Export */}
           <div className="flex items-center flex-wrap gap-2">
-            {/* AI Improve Trigger Button — it repairs markup, so a package has nothing for it to do */}
-            {!isPackage && (
+            {/* AI Improve Trigger Button */}
             <button
               onClick={() => setShowImproveDrawer((prev) => !prev)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
@@ -1107,7 +1112,6 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
               <Sparkles className="w-3.5 h-3.5 text-amber-400" />
               <span>Improve with AI</span>
             </button>
-            )}
 
             {/* Undo button if available */}
             {undoStack.length > 0 && (
@@ -1163,16 +1167,26 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
             <button
               onClick={handleDownloadFile}
               className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 text-xs font-medium transition-colors"
-              title={`Export ${isPackage ? 'JSON' : 'HTML'} file (⌘S)`}
+              title="Export this format as an HTML file (⌘S)"
             >
               <Download className="w-3.5 h-3.5 text-zinc-400" />
-              <span>Export</span>
+              <span>Export HTML</span>
+            </button>
+
+            {/* Export the package the CMS extension fills its form from */}
+            <button
+              onClick={handleDownloadJson}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 text-xs font-medium transition-colors"
+              title={`Export the ${packageLanguage.toUpperCase()} JSON package: this format's body under the metadata above`}
+            >
+              <FileJson className="w-3.5 h-3.5 text-zinc-400" />
+              <span>Export JSON</span>
             </button>
           </div>
         </div>
 
         {/* AI Improvement Drawer */}
-        {!isPackage && showImproveDrawer && (
+        {showImproveDrawer && (
           <div className="bg-zinc-950 border-b border-zinc-800 p-4 space-y-3 animate-in fade-in slide-in-from-top-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1317,8 +1331,7 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
           </div>
         )}
 
-        {/* HTML Editing Toolbar — tags and prettify are meaningless inside a JSON package */}
-        {!isPackage && (
+        {/* HTML Editing Toolbar */}
         <div className="bg-zinc-950/90 border-b border-zinc-800/80 px-3 sm:px-4 py-2 flex flex-wrap items-center justify-between gap-2 text-xs select-none">
           <div className="flex items-center flex-wrap gap-1">
             <span className="text-[11px] font-mono uppercase text-zinc-400 font-semibold mr-1">
@@ -1510,7 +1523,6 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
             <span>Prettify</span>
           </button>
         </div>
-        )}
 
         {/* TWO SEPARATED PANELS: CODE ON LEFT, LIVE PREVIEW ON RIGHT */}
         <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-zinc-800 bg-zinc-950 min-h-[640px]">
@@ -1520,15 +1532,10 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
               <div className="flex items-center gap-2">
                 <Code2 className="w-3.5 h-3.5 text-zinc-400" />
                 <span className="font-semibold text-zinc-200 uppercase tracking-wide">
-                  {isPackage ? 'JSON Package' : 'HTML Source Code Editor'}
+                  HTML Source Code Editor
                 </span>
                 <span className="text-zinc-500">•</span>
                 <span className="text-zinc-400">{activeFormatMeta.name}</span>
-                {isPackage && (
-                  <span className="text-zinc-500" title="Assembled from the SEO metadata and this language's HTML">
-                    derived — edit the metadata or the HTML
-                  </span>
-                )}
               </div><div className="flex items-center gap-2">
                 <span className="px-1.5 py-0.5 rounded bg-zinc-950 border border-zinc-800 text-zinc-300">
                   {currentFormatStats.words} w
@@ -1552,36 +1559,23 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
               <textarea
                 ref={codeEditorRef}
                 value={draft}
-                readOnly={isPackage}
                 onChange={(e) => handleDraftChange(e.target.value)}
                 onKeyDown={(e) => {
-                  // Tab indents the current line, and indents every line of a
-                  // multi-line selection, instead of losing focus to the next
+                  // Tab indents the lines the selection touches and Shift+Tab
+                  // undoes one step of that, instead of losing focus to the next
                   // element on the page.
                   if (e.key === 'Tab') {
                     e.preventDefault();
                     const textarea = e.currentTarget;
-                    const start = textarea.selectionStart;
-                    const end = textarea.selectionEnd;
-                    const value = draftRef.current;
-
-                    if (!e.shiftKey && start !== end) {
-                      const lineStart = value.lastIndexOf('\n', start - 1) + 1;
-                      const block = value.slice(lineStart, end);
-                      const indented = block.replace(/^/gm, '  ');
-                      const next = value.slice(0, lineStart) + indented + value.slice(end);
-                      handleDraftChange(next);
-                      requestAnimationFrame(() => {
-                        textarea.setSelectionRange(lineStart, lineStart + indented.length);
-                      });
-                      return;
-                    }
-
-                    handleDraftChange(
-                      value.slice(0, start) + '  ' + value.slice(end)
+                    const { next, selection } = reindentLines(
+                      draftRef.current,
+                      textarea.selectionStart,
+                      textarea.selectionEnd,
+                      e.shiftKey ? 'out' : 'in'
                     );
+                    if (next !== draftRef.current) handleDraftChange(next);
                     requestAnimationFrame(() => {
-                      textarea.setSelectionRange(start + 2, start + 2);
+                      textarea.setSelectionRange(selection[0], selection[1]);
                     });
                     return;
                   }
@@ -1604,14 +1598,46 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
             {/* Browser Preview Header with viewport controls */}
             <div className="bg-zinc-900/90 px-4 py-2 border-b border-zinc-800 text-[11px] font-mono text-zinc-400 flex flex-wrap items-center justify-between gap-2 select-none">
               <div className="flex items-center gap-2">
-                <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                {showJsonPanel ? (
+                  <FileJson className="w-3.5 h-3.5 text-emerald-400" />
+                ) : (
+                  <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                )}
                 <span className="font-semibold text-zinc-200 uppercase tracking-wide">
-                  Web Browser Live Preview
+                  {showJsonPanel
+                    ? `JSON Package (${packageLanguage.toUpperCase()})`
+                    : 'Web Browser Live Preview'}
                 </span>
               </div>
 
-              {/* Viewport switcher */}
-              <div className="flex items-center gap-1 bg-zinc-950 p-0.5 rounded-lg border border-zinc-800">
+              <div className="flex items-center gap-2">
+                {/* Panel switcher: the page as it renders, or the package the CMS takes */}
+                <div className="flex items-center bg-zinc-950 p-0.5 rounded-lg border border-zinc-800">
+                  <button
+                    type="button"
+                    onClick={() => setShowJsonPanel(false)}
+                    className={`px-2 py-1 rounded text-[11px] ${
+                      !showJsonPanel ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                    title="Rendered page preview"
+                  >
+                    Preview
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowJsonPanel(true)}
+                    className={`px-2 py-1 rounded text-[11px] ${
+                      showJsonPanel ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                    title="The metadata plus this format's body, as the CMS extension reads it"
+                  >
+                    JSON
+                  </button>
+                </div>
+
+                {/* Viewport switcher — only the rendered page has a width to fit */}
+                {!showJsonPanel && (
+                <div className="flex items-center gap-1 bg-zinc-950 p-0.5 rounded-lg border border-zinc-800">
                 <button
                   type="button"
                   onClick={() => setViewportMode('desktop')}
@@ -1648,6 +1674,8 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                 >
                   <Smartphone className="w-3.5 h-3.5" />
                 </button>
+                </div>
+                )}
               </div>
             </div>
 
@@ -1670,7 +1698,9 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                     <span className="w-2.5 h-2.5 rounded-full bg-zinc-300" />
                   </div>
                   <div className="bg-white px-2.5 py-0.5 rounded text-[11px] font-mono text-zinc-500 border border-zinc-200 truncate max-w-xs">
-                    realleaderusa.id/blog/{metaDraft.urlSlug}?format={selectedFormat}
+                    {showJsonPanel
+                      ? jsonExportName(metaDraft.urlSlug, packageLanguage)
+                      : `realleaderusa.id/blog/${metaDraft.urlSlug}?format=${selectedFormat}`}
                   </div>
                   <div className="text-[10px] font-mono uppercase font-bold text-zinc-400">
                     {selectedFormat.endsWith('-id') ? 'ID' : 'EN'}
@@ -1678,12 +1708,18 @@ export const ArticleWorkspace: React.FC<ArticleWorkspaceProps> = ({
                 </div>
 
                 {/* Sandboxed Iframe Rendering Active Format */}
-                <iframe
-                  ref={iframeRef}
-                  title="Live Web Preview of Active Format"
-                  className="w-full h-[580px] lg:h-[650px] border-0 bg-white"
-                  sandbox="allow-scripts allow-same-origin"
-                />
+                {showJsonPanel ? (
+                  <pre className="w-full h-[580px] lg:h-[650px] overflow-auto p-3 bg-white text-zinc-800 font-mono text-[11px] sm:text-xs leading-relaxed whitespace-pre-wrap break-words">
+                    {articlePackage}
+                  </pre>
+                ) : (
+                  <iframe
+                    ref={iframeRef}
+                    title="Live Web Preview of Active Format"
+                    className="w-full h-[580px] lg:h-[650px] border-0 bg-white"
+                    sandbox="allow-scripts allow-same-origin"
+                  />
+                )}
               </div>
             </div>
           </div>

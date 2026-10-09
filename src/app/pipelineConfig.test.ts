@@ -54,6 +54,15 @@ describe('sanitizePipelineConfig', () => {
     expect(sanitizePipelineConfig({ targetFormats: [] }).targetFormats).toEqual([]);
   });
 
+  // A config stored while the JSON package was still a generation target must not
+  // ask a run to render a format that no longer exists.
+  it('drops a stored format no run can render', () => {
+    const config = sanitizePipelineConfig({
+      targetFormats: ['inline-en', 'json-en', 'clean-id', 42],
+    });
+    expect(config.targetFormats).toEqual(['inline-en', 'clean-id']);
+  });
+
   it('repairs a missing or non-array format list to the defaults', () => {
     expect(sanitizePipelineConfig({}).targetFormats).toEqual(
       DEFAULT_PIPELINE_CONFIG.targetFormats

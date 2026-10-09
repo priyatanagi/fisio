@@ -343,6 +343,9 @@ function renderInlineStyle(declarations: Record<string, string>): string {
     .join('; ');
 }
 
+/** Marks the sheet this function injects, so applying it twice changes nothing. */
+export const BRAND_SHEET_MARKER = '/*brand-design-tokens*/';
+
 /**
  * Write the compiled declarations onto the elements that carry them.
  *
@@ -351,6 +354,11 @@ function renderInlineStyle(declarations: Record<string, string>): string {
  * attribute at all are skipped: adding one would change the document's
  * structure far more than the tokens warrant, and clean-HTML output is expected
  * to arrive unstyled.
+ *
+ * Clean mode gets a stylesheet instead. It is written AFTER any stylesheet the
+ * model authored, because element rules of equal specificity resolve by order:
+ * last one wins. That is what lets the profile's font outrank the one the model
+ * invented without deleting the classes the markup depends on.
  */
 export function applyTokenCss(
   html: string,
@@ -359,16 +367,20 @@ export function applyTokenCss(
 ): { html: string; touched: number } {
   const mode = options.mode ?? 'inline';
   if (mode === 'clean') {
-    // Clean HTML gets a stylesheet rather than per-element attributes.
-    if (/<style/i.test(html)) return { html, touched: 0 };
-    const sheet = `<style>${compileTokenCss(rules)}</style>`;
+    if (html.includes(BRAND_SHEET_MARKER)) return { html, touched: 0 };
+    const sheet = `<style>${BRAND_SHEET_MARKER}\n${compileTokenCss(rules)}</style>`;
+    const touched = compileElementRules(rules).length;
+    const ownSheet = html.lastIndexOf('</style>');
+    if (ownSheet >= 0) {
+      return { html: `${html.slice(0, ownSheet + 8)}${sheet}${html.slice(ownSheet + 8)}`, touched };
+    }
     if (/<(article|body|main|div)[^>]*>/i.test(html)) {
       return {
         html: html.replace(/<(article|body|main|div)([^>]*)>/i, `<$1$2>${sheet}`),
-        touched: compileElementRules(rules).length,
+        touched,
       };
     }
-    return { html: `${sheet}${html}`, touched: compileElementRules(rules).length };
+    return { html: `${sheet}${html}`, touched };
   }
 
   let touched = 0;

@@ -49,6 +49,8 @@ export interface SeoBrief {
   faqPlan: FaqPlanItem[];
   statPlan: string[];
   internalLinkTargets: string[];
+  /** The closing invitation the article must end with, planned rather than improvised. */
+  cta?: { heading: string; offer: string };
   source: 'impower' | 'creator-selfplanned' | 'minimal';
 }
 
@@ -133,7 +135,7 @@ export const DEFAULT_PIPELINE_CONFIG: PipelineConfig = {
   judge: true,
   impower: 'standard',
   reviewer: 'strict',
-  targetFormats: ['inline-en', 'inline-id', 'clean-en', 'clean-id', 'json-en', 'json-id'],
+  targetFormats: ['inline-en', 'inline-id', 'clean-en', 'clean-id'],
   languages: ['en', 'id'],
   targetWords: 950,
   lengthTarget: 'standard',

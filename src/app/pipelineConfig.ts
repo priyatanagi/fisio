@@ -4,7 +4,11 @@ import {
   type PipelineConfig,
   type ReviewerMode,
 } from '../pipeline/stages';
-import type { LengthTarget } from '../types/article';
+import {
+  RENDERABLE_FORMAT_IDS,
+  type LengthTarget,
+  type OutputFormatId,
+} from '../types/article';
 
 const IMPOWER_LEVELS: ImpowerLevel[] = ['off', 'lite', 'standard', 'max'];
 const REVIEWER_MODES: ReviewerMode[] = ['off', 'advisory', 'strict'];
@@ -32,8 +36,13 @@ export function sanitizePipelineConfig(stored: unknown): PipelineConfig {
   // An empty list is kept as-is: it is what the format picker's "Deselect All"
   // means, and the disabled Generate button is what stops a run with nothing
   // selected. Only a missing or non-array value falls back to the defaults.
+  // The list is checked against what a run can render, so a config stored while
+  // the JSON package was still a target cannot ask for a format that no longer
+  // exists.
   const targetFormats = Array.isArray(raw.targetFormats)
-    ? (raw.targetFormats.filter((f) => typeof f === 'string') as PipelineConfig['targetFormats'])
+    ? (raw.targetFormats.filter(
+        (f): f is OutputFormatId => RENDERABLE_FORMAT_IDS.includes(f as OutputFormatId)
+      ) as PipelineConfig['targetFormats'])
     : base.targetFormats;
   const languages = Array.isArray(raw.languages)
     ? (raw.languages.filter((l) => l === 'en' || l === 'id') as PipelineConfig['languages'])

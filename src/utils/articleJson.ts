@@ -1,10 +1,18 @@
-import type { FormatsBundle, OutputFormatId, SeoMetadata } from '../types/article';
+import type { SeoMetadata } from '../types/article';
 
 /**
  * The JSON package is the article as data: the SEO metadata the reader sees in
- * the metadata panel, plus the rendered body of one language. Nothing here asks
- * a model for anything — the fields already exist, so packaging is arithmetic.
+ * the metadata panel, plus the body of one language. It is assembled at export
+ * time from markup that was already rendered, never by a model call.
+ *
+ * The shape is the CMS extension's contract. `cms-extension/lib.js` fills the
+ * English form from FIELD_KEYS and the Indonesian form from ID_SECTION_KEYS, and
+ * that Indonesian form has no field for slug, category, date or keywords, so a
+ * package naming them would be silently dropped. The key order here mirrors
+ * `example-content.json` and `example-content.id.json` in that extension.
  */
+export type PackageLanguage = 'en' | 'id';
+
 export interface ArticleJsonPackage {
   title: string;
   slug: string;
@@ -17,9 +25,14 @@ export interface ArticleJsonPackage {
   body: string;
 }
 
-export const isJsonFormat = (id: string): id is 'json-en' | 'json-id' => id.startsWith('json-');
-
-export const jsonLanguage = (id: string): 'en' | 'id' => (id.endsWith('-id') ? 'id' : 'en');
+/** A package for the Indonesian form, which receives only these five fields. */
+export interface ArticleJsonPackageId {
+  title: string;
+  excerpt: string;
+  tags: string[];
+  meta: string;
+  body: string;
+}
 
 /**
  * The article body as the package needs it: no stylesheet, no accordion script or
@@ -41,6 +54,7 @@ export function extractJsonBody(html: string): string {
 }
 
 export interface BuildArticleJsonInput {
+  language: PackageLanguage;
   metadata: SeoMetadata;
   generatedAt: string;
   bodyHtml: string;
@@ -49,26 +63,37 @@ export interface BuildArticleJsonInput {
   keywordFallback?: string[];
 }
 
-export function buildArticleJson(input: BuildArticleJsonInput): ArticleJsonPackage {
-  const { metadata, generatedAt, bodyHtml } = input;
+export function buildArticleJson(
+  input: BuildArticleJsonInput
+): ArticleJsonPackage | ArticleJsonPackageId {
+  const { language, metadata, generatedAt, bodyHtml } = input;
   const at = new Date(generatedAt);
 
   const keywords = metadata.keywords?.length
     ? metadata.keywords
     : (input.keywordFallback ?? []).filter((word) => word.trim().length > 0);
 
-  return {
+  const shared = {
     title: metadata.headline?.trim() || metadata.seoTitle?.trim() || '',
+    excerpt: metadata.excerpt?.trim() || metadata.metaDescription?.trim() || '',
+    tags: metadata.tags ?? [],
+    meta: metadata.metaDescription?.trim() || '',
+    body: extractJsonBody(bodyHtml),
+  };
+  if (language === 'id') return shared;
+
+  return {
+    title: shared.title,
     slug: metadata.urlSlug?.trim() || '',
     category: metadata.category?.trim() || input.categoryFallback?.trim() || '',
     date: Number.isNaN(at.getTime()) ? '' : at.toISOString().slice(0, 10),
-    excerpt: metadata.excerpt?.trim() || metadata.metaDescription?.trim() || '',
-    tags: metadata.tags ?? [],
+    excerpt: shared.excerpt,
+    tags: shared.tags,
     keywords: metadata.focusKeyphrase
       ? [metadata.focusKeyphrase, ...keywords.filter((word) => word !== metadata.focusKeyphrase)]
       : keywords,
-    meta: metadata.metaDescription?.trim() || '',
-    body: extractJsonBody(bodyHtml),
+    meta: shared.meta,
+    body: shared.body,
   };
 }
 
@@ -76,79 +101,8 @@ export const serializeArticleJson = (input: BuildArticleJsonInput): string =>
   JSON.stringify(buildArticleJson(input), null, 2);
 
 /**
- * The body out of a package the reader may have hand-edited. Returns '' for text
- * that is not a package, which every scoring surface already reads as "nothing to
- * measure".
+ * The package's filename. The extension reads a language off it, so the `-id`
+ * tail is what tells an Indonesian package from an English one.
  */
-export function jsonPackageBody(raw: string): string {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return '';
-  }
-  if (!parsed || typeof parsed !== 'object') return '';
-  const body = (parsed as { body?: unknown }).body;
-  return typeof body === 'string' ? body : '';
-}
-
-/** The HTML a JSON package for this language was built from. */
-function bodySourceForLanguage(formats: FormatsBundle, language: 'en' | 'id'): string {
-  return formats[`clean-${language}`] || formats[`inline-${language}`] || '';
-}
-
-/** True when the bundle carries an HTML format for the language, empty or not. */
-function hasHtmlSlot(formats: FormatsBundle, language: 'en' | 'id'): boolean {
-  return `clean-${language}` in formats || `inline-${language}` in formats;
-}
-
-export interface SyncJsonExtras {
-  categoryFallback?: string;
-  keywordFallback?: string[];
-  /**
-   * Markup rendered for a package body alone, by a run that checked a JSON
-   * format and no HTML one for that language. It is not a format the reader
-   * asked for, so it never enters the bundle.
-   */
-  bodyHtml?: Partial<Record<'en' | 'id', string>>;
-}
-
-/**
- * Rebuild every JSON format already in the bundle from the HTML and metadata now
- * in play. The package is a projection of those two, so editing the SEO title or
- * repairing the HTML has to move it — a stored copy would quietly ship the old
- * metadata. A language with no rendered HTML has no package.
- */
-export function syncJsonFormats(
-  formats: FormatsBundle,
-  metadata: SeoMetadata,
-  generatedAt: string,
-  extras: SyncJsonExtras = {}
-): FormatsBundle {
-  const { bodyHtml: bodyByLanguage, ...fallbacks } = extras;
-  const next: FormatsBundle = { ...formats };
-  for (const id of Object.keys(formats) as OutputFormatId[]) {
-    if (!isJsonFormat(id)) continue;
-    const language = jsonLanguage(id);
-    const bodyHtml =
-      bodySourceForLanguage(formats, language) || bodyByLanguage?.[language] || '';
-
-    if (!bodyHtml.trim()) {
-      // A bundle with no HTML format for the language holds a body that was
-      // rendered for the package alone. That body exists nowhere else, so the
-      // package keeps it and only its metadata moves: dropping it would empty
-      // the one format the reader asked for. A language whose HTML slot is
-      // present but blank really did render nothing, and still drops.
-      const kept = hasHtmlSlot(formats, language) ? '' : jsonPackageBody(formats[id] ?? '');
-      if (!kept.trim()) {
-        delete next[id];
-        continue;
-      }
-      next[id] = serializeArticleJson({ metadata, generatedAt, bodyHtml: kept, ...fallbacks });
-      continue;
-    }
-
-    next[id] = serializeArticleJson({ metadata, generatedAt, bodyHtml, ...fallbacks });
-  }
-  return next;
-}
+export const jsonExportName = (slug: string, language: PackageLanguage): string =>
+  `${slug.trim() || 'article'}-json-${language}.json`;

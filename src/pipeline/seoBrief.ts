@@ -35,6 +35,7 @@ export function briefFromCreator(
     faqPlan: selfPlanned?.faqPlan ?? [],
     statPlan: selfPlanned?.statPlan ?? [],
     internalLinkTargets: selfPlanned?.internalLinkTargets ?? [],
+    cta: selfPlanned?.cta,
     source: 'creator-selfplanned',
   };
 }

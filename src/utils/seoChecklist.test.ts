@@ -34,12 +34,37 @@ Sasaran utama adalah anak sekolah dasar kelas satu sampai enam. Pendaftaran dila
 Distribusi dilakukan melalui dapur yang dikelola sekolah. Pengambilan dilakukan pada jam istirahat. Jadwal distribusi berjalan setiap hari.
 `;
 
-  it('returns exactly the 14 draft-capable checks', () => {
+  it('returns exactly the 15 draft-capable checks', () => {
     const items = evaluateDraftChecks(extractDocument(markdown, 'markdown'), metadata, 'makan bergizi gratis');
-    expect(items).toHaveLength(14);
+    expect(items).toHaveLength(15);
     expect(items.map((i) => i.id)).not.toContain('native_images');
     expect(items.map((i) => i.id)).not.toContain('contextual_links');
     expect(items.map((i) => i.id)).not.toContain('faq_schema');
+  });
+
+  it('fails cta_present when the draft ends without an invitation', () => {
+    const items = evaluateDraftChecks(extractDocument(markdown, 'markdown'), metadata, 'makan bergizi gratis');
+    expect(pass(items, 'cta_present')).toBe(false);
+  });
+
+  it('passes cta_present on a marked call-to-action block', () => {
+    const withCta = `${markdown}\n\n<aside class="cta">Daftar sebagai pemasok.</aside>\n`;
+    const items = evaluateDraftChecks(
+      extractDocument(withCta, 'markdown'),
+      metadata,
+      'makan bergizi gratis'
+    );
+    expect(pass(items, 'cta_present')).toBe(true);
+  });
+
+  it('passes cta_present when the closing paragraphs invite the reader to act', () => {
+    const invited = `${markdown}\n\nDapur sekolah dapat meminta [penawaran resmi](https://example.org/quote) lewat portal dinas. Balasan dikirim dalam tiga hari kerja.\n`;
+    const items = evaluateDraftChecks(
+      extractDocument(invited, 'markdown'),
+      metadata,
+      'makan bergizi gratis'
+    );
+    expect(pass(items, 'cta_present')).toBe(true);
   });
 
   it('passes the keyphrase-in-first-paragraph check when the phrase leads the body', () => {
@@ -382,10 +407,10 @@ describe('evaluateHtmlChecks', () => {
 });
 
 describe('evaluateSeoChecklist', () => {
-  it('still composes all 17 checks for html', () => {
+  it('still composes all 18 checks for html', () => {
     const report = evaluateSeoChecklist('<h2>S</h2><p>Teks satu. Teks dua. Teks tiga.</p>', metadata, 'makan bergizi gratis');
-    expect(report.totalCount).toBe(17);
-    expect(new Set(report.items.map((i) => i.id)).size).toBe(17);
+    expect(report.totalCount).toBe(18);
+    expect(new Set(report.items.map((i) => i.id)).size).toBe(18);
     expect(report.score).toBe(Math.round((report.passedCount / report.totalCount) * 100));
   });
 

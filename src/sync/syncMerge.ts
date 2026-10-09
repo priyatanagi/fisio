@@ -303,6 +303,7 @@ export function sanitizeCloudRules(raw: unknown): UniversalRules | null {
     focusKeyphraseMaxChars: positive(obj.focusKeyphraseMaxChars, d.focusKeyphraseMaxChars),
     requireStats: bool(obj.requireStats, d.requireStats),
     requireFaq: bool(obj.requireFaq, d.requireFaq),
+    requireCta: bool(obj.requireCta, d.requireCta),
     allowInlineScripts: bool(obj.allowInlineScripts, d.allowInlineScripts),
     allowH1InArticle: bool(obj.allowH1InArticle, d.allowH1InArticle),
   };

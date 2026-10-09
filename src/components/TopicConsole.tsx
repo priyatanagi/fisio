@@ -12,21 +12,14 @@ import {
   Square,
   Tag,
 } from 'lucide-react';
-import { LengthTarget, OutputFormatId } from '../types/article';
+import { LengthTarget, OutputFormatId, RENDERABLE_FORMAT_IDS } from '../types/article';
 import {
   LENGTH_PRESETS,
   RESEARCH_KEYWORD_SEGMENTS,
 } from '../config/defaultPrompts';
 
-/** Every output format the pipeline can produce, in the order the picker shows them. */
-const ALL_FORMAT_IDS: OutputFormatId[] = [
-  'inline-en',
-  'inline-id',
-  'clean-en',
-  'clean-id',
-  'json-en',
-  'json-id',
-];
+/** Every format a run can render, in the order the picker shows them. */
+const ALL_FORMAT_IDS: OutputFormatId[] = [...RENDERABLE_FORMAT_IDS];
 
 interface TopicConsoleProps {
   topic: string;
@@ -71,6 +64,21 @@ export const TopicConsole: React.FC<TopicConsoleProps> = ({
 
   useEffect(() => {
     inputRef.current?.focus();
+  }, []);
+
+  // The hint beside the field advertises ⌘K, so this is a window listener rather
+  // than a key handler on the input — the field is by definition not focused
+  // when the reader reaches for it.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey) return;
+      if (e.key.toLowerCase() !== 'k') return;
+      e.preventDefault();
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -294,12 +302,12 @@ export const TopicConsole: React.FC<TopicConsoleProps> = ({
         )}
       </div>
 
-      {/* Output Formats Multi-Select: Four HTML modes plus the JSON package */}
+      {/* Output Formats Multi-Select: the HTML renders a run produces */}
       <div className="bg-zinc-950/90 border border-zinc-800 rounded-lg p-3 space-y-2">
         <div className="flex items-center justify-between text-xs">
           <div className="flex items-center gap-1.5 font-medium text-zinc-300">
             <Layers className="w-3.5 h-3.5 text-zinc-400" />
-            <span>Target Output Formats (Total 6 Formats)</span>
+            <span>Target Output Formats (Total {ALL_FORMAT_IDS.length} Formats)</span>
           </div>
           <button
             type="button"
@@ -307,18 +315,18 @@ export const TopicConsole: React.FC<TopicConsoleProps> = ({
             disabled={isGenerating}
             className="text-[11px] text-zinc-400 hover:text-zinc-200 underline font-mono"
           >
-            {allFormatsSelected ? 'Deselect All 6 Formats' : 'Select All 6 Formats'}
+            {allFormatsSelected
+              ? `Deselect All ${ALL_FORMAT_IDS.length} Formats`
+              : `Select All ${ALL_FORMAT_IDS.length} Formats`}
           </button>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           {[
             { id: 'inline-en' as OutputFormatId, label: 'Inline CSS (EN)', desc: 'Mode 1 English' },
             { id: 'inline-id' as OutputFormatId, label: 'Inline CSS (ID)', desc: 'Mode 1 Indonesia' },
             { id: 'clean-en' as OutputFormatId, label: 'Clean HTML (EN)', desc: 'Mode 2 English' },
             { id: 'clean-id' as OutputFormatId, label: 'Clean HTML (ID)', desc: 'Mode 2 Indonesia' },
-            { id: 'json-en' as OutputFormatId, label: 'JSON (EN)', desc: 'Mode 3 English' },
-            { id: 'json-id' as OutputFormatId, label: 'JSON (ID)', desc: 'Mode 3 Indonesia' },
           ].map((fmt) => {
             const isSelected = targetFormats.includes(fmt.id);
             return (

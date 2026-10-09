@@ -4,6 +4,10 @@
  * transformed cleanly from inlineCssHtml with semantic tags, CSS variables, and JS.
  */
 
+import type { DesignRules } from '../types/profile';
+import { DEFAULT_USER_PROFILE } from '../types/profile';
+import { withTokenDefaults } from '../config/designTokens';
+
 export function isCleanHtmlIncomplete(cleanHtml?: string): boolean {
   if (!cleanHtml || typeof cleanHtml !== 'string') return true;
 
@@ -36,11 +40,19 @@ export function isCleanHtmlIncomplete(cleanHtml?: string): boolean {
   return false;
 }
 
+/**
+ * Rebuild a clean render from the inline one when the clean call came back
+ * truncated. The stylesheet is compiled from the profile's tokens, because this
+ * document is what the reader ships — a hardcoded brand here would publish a
+ * font and a colour the reader never chose.
+ */
 export function synthesizeCleanHtml(
   inlineCssHtml: string,
   existingCleanHtml?: string,
-  topic: string = 'Commercial Fitness Equipment'
+  topic: string = 'Commercial Fitness Equipment',
+  profileRules?: DesignRules
 ): string {
+  const rules = withTokenDefaults(profileRules ?? DEFAULT_USER_PROFILE.designRules);
   if (!inlineCssHtml || typeof inlineCssHtml !== 'string') {
     return existingCleanHtml || '';
   }
@@ -78,32 +90,37 @@ export function synthesizeCleanHtml(
 
   return `${schemaScript}<style>
 :root {
-  --primary: #cc2929;
-  --dark: #1a1d20;
-  --slate: #333940;
-  --bg-neutral: #f8fafc;
+  --primary: ${rules.primaryColor};
+  --dark: ${rules.secondaryColor};
+  --slate: ${rules.textColor};
+  --bg-neutral: ${rules.backgroundColor};
   --border: #e2e8f0;
+  --heading-font: ${rules.headingFont};
+  --body-font: ${rules.bodyFont};
 }
 .commercial-fitness-post {
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--body-font);
   color: var(--slate);
-  line-height: 1.8;
-  max-width: 840px;
-  margin: 0 auto;
+  line-height: ${rules.lineHeight};
   padding: 32px 24px;
 }
-.commercial-fitness-post h2 {
+.commercial-fitness-post h1,
+.commercial-fitness-post h2,
+.commercial-fitness-post h3,
+.commercial-fitness-post h4 {
+  font-family: var(--heading-font);
   color: var(--dark);
+  font-weight: ${rules.headingWeight};
+  letter-spacing: ${rules.letterSpacing};
+}
+.commercial-fitness-post h2 {
   font-size: 1.85rem;
-  font-weight: 700;
   margin-top: 2em;
   margin-bottom: 0.75em;
-  letter-spacing: -0.02em;
   border-left: 4px solid var(--primary);
   padding-left: 14px;
 }
 .commercial-fitness-post h3 {
-  color: var(--dark);
   font-size: 1.35rem;
   font-weight: 600;
   margin-top: 1.5em;
@@ -149,6 +166,14 @@ export function synthesizeCleanHtml(
 .commercial-fitness-post aside.data-callout strong {
   color: var(--primary);
   font-weight: 700;
+}
+.commercial-fitness-post aside.cta {
+  background: var(--bg-neutral);
+  border: 2px solid var(--primary);
+  border-radius: 12px;
+  padding: 22px 24px;
+  margin: 2.5em 0 0;
+  text-align: center;
 }
 .commercial-fitness-post details.faq-item {
   background: var(--bg-neutral);

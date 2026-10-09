@@ -1,4 +1,3 @@
-import { ProviderConfig } from './provider';
 import type {
   PipelineConfig,
   ReviewReport,
@@ -12,13 +11,19 @@ export type LanguageOption = 'en' | 'id' | 'es' | 'de' | 'fr';
 
 export type LengthTarget = 'short' | 'standard' | 'long' | 'custom';
 
-export type OutputFormatId =
-  | 'inline-en'
-  | 'inline-id'
-  | 'clean-en'
-  | 'clean-id'
-  | 'json-en'
-  | 'json-id';
+export type OutputFormatId = 'inline-en' | 'inline-id' | 'clean-en' | 'clean-id';
+
+/**
+ * What a run can render. The JSON package is deliberately absent: it is not
+ * markup a Designer produced, but the metadata plus one language's rendered body
+ * assembled at export time.
+ */
+export const RENDERABLE_FORMAT_IDS: readonly OutputFormatId[] = [
+  'inline-en',
+  'inline-id',
+  'clean-en',
+  'clean-id',
+];
 
 export interface SeoMetadata {
   seoTitle: string;
@@ -57,8 +62,6 @@ export interface FormatsBundle {
   'inline-id'?: string;
   'clean-en'?: string;
   'clean-id'?: string;
-  'json-en'?: string;
-  'json-id'?: string;
 }
 
 export interface MetadataVersion {
@@ -128,17 +131,4 @@ export interface GeneratedArticle {
   brandWarnings?: BrandWarning[];
   batchJobId?: string;
   batchRowId?: string;
-}
-
-export interface GenerateArticlePayload {
-  topic: string;
-  focusKeyphrase?: string;
-  secondaryKeywords?: string;
-  language?: LanguageOption;
-  lengthTarget?: LengthTarget;
-  customWordCount?: number;
-  targetFormats?: OutputFormatId[];
-  systemPromptOverride?: string;
-  negativePromptOverride?: string;
-  providerConfig?: ProviderConfig;
 }

@@ -492,25 +492,10 @@ describe('Designer fan-out', () => {
   });
 });
 
-describe('JSON package', () => {
-  it('assembles a package without a Designer call', async () => {
+describe('rendered formats only', () => {
+  it('stores exactly the HTML formats the run rendered', async () => {
     const result = await run(
-      { targetFormats: ['clean-en', 'json-en'], languages: ['en'] },
-      {
-        creator: () => ({ markdownContent: markdown }),
-        designer: () => ({ html, warnings: [] }),
-      }
-    );
-    expect(calls.designer).toBe(1);
-    const payload = JSON.parse(result.article!.formats['json-en']!);
-    expect(payload.body).toBe('<p>Body</p>');
-    expect(payload.slug).toBe(result.article!.seoMetadata.urlSlug);
-    expect(payload.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-  });
-
-  it('takes the body from its own language', async () => {
-    const result = await run(
-      { targetFormats: ['inline-en', 'inline-id', 'json-en', 'json-id'], languages: ['en', 'id'] },
+      { targetFormats: ['inline-en', 'clean-id'], languages: ['en', 'id'] },
       {
         creator: () => ({ markdownContent: markdown }),
         designer: (input: any) => ({
@@ -519,56 +504,47 @@ describe('JSON package', () => {
         }),
       }
     );
-    expect(JSON.parse(result.article!.formats['json-en']!).body).toBe('<p>en</p>');
-    expect(JSON.parse(result.article!.formats['json-id']!).body).toBe('<p>id</p>');
-  });
-
-  it('drops the package for a language that rendered no HTML', async () => {
-    const result = await run(
-      { targetFormats: ['inline-en', 'inline-id', 'json-id'], languages: ['en', 'id'] },
-      {
-        creator: () => ({ markdownContent: markdown }),
-        designer: (input: any) => ({
-          html: input.language === 'en' ? html : '',
-          warnings: [],
-        }),
-      }
-    );
-    expect(result.article!.formats['json-id']).toBeUndefined();
-  });
-
-  it('renders a body for a run that checked nothing but the package', async () => {
-    const result = await run(
-      { targetFormats: ['json-en'], languages: ['en'] },
-      {
-        creator: () => ({ markdownContent: markdown }),
-        designer: () => ({ html, warnings: [] }),
-      }
-    );
-    expect(calls.designer).toBe(1);
-    expect(Object.keys(result.article!.formats)).toEqual(['json-en']);
-    expect(JSON.parse(result.article!.formats['json-en']!).body).toBe('<p>Body</p>');
-    // The body render was never a checked format, so it stays out of the mirrors
-    // the export and the format picker read.
-    expect(result.article!.cleanHtml).toBe('');
-    expect(result.article!.inlineCssHtml).toBe('');
-  });
-
-  it('renders one body per language when only packages were checked', async () => {
-    const result = await run(
-      { targetFormats: ['json-en', 'json-id'], languages: ['en', 'id'] },
-      {
-        creator: () => ({ markdownContent: markdown }),
-        designer: (input: any) => ({
-          html: `<article><p>${input.language}</p></article>`,
-          warnings: [],
-        }),
-      }
-    );
+    // The JSON package is assembled when the reader exports, so a run never
+    // carries one: nothing is stored that a Designer did not render.
+    expect(Object.keys(result.article!.formats)).toEqual(['inline-en', 'clean-id']);
     expect(calls.designer).toBe(2);
-    expect(Object.keys(result.article!.formats).sort()).toEqual(['json-en', 'json-id']);
-    expect(JSON.parse(result.article!.formats['json-en']!).body).toBe('<p>en</p>');
-    expect(JSON.parse(result.article!.formats['json-id']!).body).toBe('<p>id</p>');
+  });
+});
+
+describe('brand enforcement', () => {
+  it('replaces a font the Designer invented with the profile body font', async () => {
+    const result = await run(
+      { targetFormats: ['inline-en'], languages: ['en'] },
+      {
+        creator: () => ({ markdownContent: markdown }),
+        designer: () => ({
+          html: '<article><p style="font-family: Georgia, serif">Body</p></article>',
+          warnings: [],
+        }),
+      }
+    );
+    const shipped = result.article!.formats['inline-en']!;
+    expect(shipped).toContain(DEFAULT_USER_PROFILE.designRules.bodyFont);
+    expect(shipped).not.toContain('Georgia');
+  });
+
+  it('stamps the profile stylesheet after a clean render of its own', async () => {
+    const result = await run(
+      { targetFormats: ['clean-en'], languages: ['en'] },
+      {
+        creator: () => ({ markdownContent: markdown }),
+        designer: () => ({
+          html: '<style>p{font-family: Georgia, serif}</style><article><p>Body</p></article>',
+          warnings: [],
+        }),
+      }
+    );
+    const shipped = result.article!.formats['clean-en']!;
+    const brandAt = shipped.indexOf(DEFAULT_USER_PROFILE.designRules.bodyFont);
+    expect(brandAt).toBeGreaterThan(-1);
+    // Written later in the document, so equal-specificity element rules resolve to
+    // the brand rather than to whatever the model chose.
+    expect(brandAt).toBeGreaterThan(shipped.indexOf('Georgia'));
   });
 });
 
@@ -719,6 +695,6 @@ describe('measured metrics', () => {
     expect(article.metrics.fleschScore).toBeGreaterThan(0);
     expect(article.score).toBeDefined();
     expect(article.score?.flesch).toBeGreaterThan(0);
-    expect(article.score?.checks).toHaveLength(16);
+    expect(article.score?.checks).toHaveLength(17);
   });
 });

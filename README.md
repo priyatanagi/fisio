@@ -99,6 +99,25 @@ side is required — see [Using Ollama](#using-ollama).
 
 ---
 
+## Keyboard shortcuts
+
+Only the bindings that exist today:
+
+| Keys | What it does | Active in |
+|---|---|---|
+| ⌘/Ctrl + 1 … 5 | Switch view: Generate, Batch, Profile, History, Providers | anywhere |
+| ⌘/Ctrl + K | Focus and select the topic field | anywhere on the Generate view |
+| ⌘/Ctrl + Enter | Start the run | topic field |
+| ⌘/Ctrl + S | Export the active format as an HTML file | code editor |
+| Tab | Indent every line the selection touches (two spaces at the caret when nothing is selected) | code editor |
+| Shift + Tab | Remove one step (two spaces) of indent from those lines | code editor |
+
+The bindings live in `src/App.tsx` (view switching) and inside `TopicConsole` / `ArticleWorkspace`.
+Nothing is bound to ⌘P, ⌘⇧C or ⌘⇧S: an old shortcut sheet promised them, but the browser owns ⌘P
+and the toolbar already reaches copy and the ZIP export in one click.
+
+---
+
 ## Configuration
 
 Environment variables (documented in [`.env.example`](.env.example)). These are **server-side
@@ -155,10 +174,12 @@ cost for a single format:
 | max | 5 | 6 | 6 (8 with revision) |
 
 Judge adds one call when enabled. Default config: Judge on, Impower `standard`, Reviewer `strict`,
-all six formats (`inline-en`, `inline-id`, `clean-en`, `clean-id`, `json-en`, `json-id`), languages
-`en`+`id`, 950 target words. The `json-*` formats cost no provider call — they are assembled from
-the resolved SEO metadata plus that language's rendered body (`src/utils/articleJson.ts`), and the
-Designer fan-out skips them. Persisted configs are **sanitized on read**
+all four HTML formats (`inline-en`, `inline-id`, `clean-en`, `clean-id`), languages `en`+`id`,
+950 target words. The CMS JSON package is **not** a rendered format: it is assembled at export time
+from the resolved SEO metadata plus one language's body (`src/utils/articleJson.ts`), so it costs no
+provider call, and the ZIP carries one per language that rendered. Its field list mirrors
+`cms-extension/lib.js`, which fills the English form from nine keys and the Indonesian form from
+five. Persisted configs are **sanitized on read**
 (`src/app/pipelineConfig.ts`) so a damaged or hand-edited value falls back to defaults instead of
 silently enabling a stage.
 
@@ -171,9 +192,19 @@ silently enabling a stage.
   Both keep the same article id, so the rebuilt record replaces the halted one.
 - **Topic fidelity guard** — the Judge cannot silently rewrite your seed topic off-niche; EN+ID
   stop-word-stripped token overlap is checked against the original seed.
-- **Designer fan-out** renders one HTML document per selected format, applying brand design tokens;
-  off-palette colours are flagged in the preview. Structural guarantees are code-enforced after the
-  Designer (`src/utils/articleShell.ts`): fluid text width, no root width caps, normalized shell.
+- **Designer fan-out** renders one HTML document per selected format. Brand typography and palette are
+  **stamped onto the result** rather than hoped for: `applyTokenCss` merges the token declarations
+  into each styled element in inline mode, and in clean mode appends the compiled stylesheet *after*
+  the one the model wrote, so element rules of equal specificity resolve to the profile. The same
+  pass runs on an AI repair (`src/pipeline/improveArticle.ts`), so a fix cannot restyle the article
+  off-brand. Off-palette colours are flagged in the preview. Structural guarantees are code-enforced
+  after the Designer (`src/utils/articleShell.ts`): fluid text width, no root width caps, normalized
+  shell.
+- **Closing call to action** is part of the brief (`cta`), required by the writing rules
+  (`UniversalRules.requireCta`, worded from the profile's *Default call to action*) and measured as
+  the scored `cta_present` check — a missing one fails, so it reaches the Improver instead of
+  shipping silently. The block is marked `class="cta"`, which is also what the brand stylesheet
+  styles.
 - **Chunk-and-stitch fallback** (`src/server/chunked.ts`) — for `creator` (4 sections) and
   `designer` (3), a truncated/unparseable first attempt is re-planned as per-section JSON calls
   whose bodies are stitched with heading/tail de-duplication. This is what makes small local
@@ -204,8 +235,9 @@ Key files: `src/pipeline/runArticle.ts`, `src/pipeline/runAgent.ts`, `src/pipeli
 - **`src/config/designTokens.ts`** — single source of truth: every token (colors, typography,
   headings, quotes, tables, FAQ, buttons, image frame, caption style, …) maps to both the React
   preview styles and the declarations compiled into the Designer prompt.
-- **`src/config/tokenCss.ts`** — compiles tokens into the real stylesheet (clean and inline modes)
-  and **verifies generated HTML** for palette compliance (`verifyTokenCompliance`).
+- **`src/config/tokenCss.ts`** — compiles tokens into the real stylesheet (clean and inline modes),
+  **applies it to every render** (`applyTokenCss`, idempotent through a sheet marker) and verifies
+  generated HTML for palette compliance (`verifyTokenCompliance`).
 - **`src/config/tokenContrast.ts`** — WCAG 2.1 contrast validation of token pairs, surfaced when
   the profile is saved. Every reading pairing also declares which token a repair is allowed to
   move, so the page background is never the thing that gets repainted.
@@ -268,8 +300,7 @@ CSV columns: `Topic_Idea`, `Focus_Keyphrase`, `Target_Length`, `Tone_Override`.
   - A one-time migration (`src/db/migrate.ts`) moves legacy `localStorage.fitseo_history` into the
     `articles` store.
 - **localStorage** (small, synchronous settings): `fitseo_profile`, `fitseo_multi_agent_config`,
-  `fitseo_universal_rules`, `fitseo_pipeline_config`, and the prompt overrides written by the rules
-  modal (`fitseo_system_prompt`, `fitseo_negative_prompt`).
+  `fitseo_universal_rules`, `fitseo_pipeline_config`.
 - History updates in place (`upsertArticle`, `src/app/articleList.ts`) so new saves appear without
   a reload.
 - **Optional cloud copy**: articles, their version history and the rules can be mirrored to your own
@@ -475,12 +506,10 @@ src/
     articleList.ts           upsertArticle so History refreshes in place
   views/                     Generate, Batch, Profile, History, Providers
   components/                TopicConsole, PipelineSettingsPanel, ProcessProviderSelector,
-                             ArticleWorkspace, HtmlPreviewPane, ActivityPanel, UnfinishedRuns,
-                             BatchUploadTable, BatchQueueTable, HistoryTable,
-                             ReadabilityScorecard, SeoChecklistPanel, UserProfileForm,
-                             BrandKitPanel, DesignTokenPreview, LiveTokenTestBanner,
-                             RuleDiffPanel, ModelPicker, CloudSyncPanel, Header, RulesModal,
-                             ShortcutsModal
+                             ArticleWorkspace, ActivityPanel, UnfinishedRuns, BatchUploadTable,
+                             BatchQueueTable, HistoryTable, ReadabilityScorecard,
+                             SeoChecklistPanel, UserProfileForm, BrandKitPanel,
+                             LiveTokenTestBanner, RuleDiffPanel, ModelPicker, CloudSyncPanel
   sync/                      cloudConfig (env + workspace secret), supabaseRest (PostgREST over
                              fetch), syncMerge (last-write-wins + payload sanitizers),
                              syncQueue (offline-persisted pending work), tombstones (deletes that

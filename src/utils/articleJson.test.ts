@@ -2,12 +2,16 @@ import { describe, it, expect } from 'vitest';
 import {
   buildArticleJson,
   extractJsonBody,
-  isJsonFormat,
-  jsonPackageBody,
+  jsonExportName,
   serializeArticleJson,
-  syncJsonFormats,
+  type ArticleJsonPackage,
 } from './articleJson';
 import type { SeoMetadata } from '../types/article';
+
+/** What `cms-extension/lib.js` fills the English form from. */
+const FIELD_KEYS = ['title', 'slug', 'category', 'date', 'excerpt', 'tags', 'keywords', 'meta', 'body'];
+/** What its Indonesian form has fields for — nothing else can be filled. */
+const ID_SECTION_KEYS = ['title', 'excerpt', 'tags', 'meta', 'body'];
 
 const metadata: SeoMetadata = {
   seoTitle: 'Buying Guide for Commercial Gym Equipment',
@@ -51,8 +55,15 @@ describe('extractJsonBody', () => {
 });
 
 describe('buildArticleJson', () => {
-  it('produces the package in publishing order', () => {
-    expect(buildArticleJson({ metadata, generatedAt: GENERATED_AT, bodyHtml: '<p>Body</p>' })).toEqual({
+  it('produces the English package in the order the extension reads it', () => {
+    const pkg = buildArticleJson({
+      language: 'en',
+      metadata,
+      generatedAt: GENERATED_AT,
+      bodyHtml: '<p>Body</p>',
+    });
+    expect(Object.keys(pkg)).toEqual(FIELD_KEYS);
+    expect(pkg).toEqual({
       title: metadata.headline,
       slug: metadata.urlSlug,
       category: 'Gym Planning',
@@ -65,7 +76,25 @@ describe('buildArticleJson', () => {
     });
   });
 
-  it('fills gaps from the article around them', () => {
+  it('produces only the five fields the Indonesian form can receive', () => {
+    const pkg = buildArticleJson({
+      language: 'id',
+      metadata,
+      generatedAt: GENERATED_AT,
+      bodyHtml: '<article><p>Isi</p></article>',
+    });
+    // Slug, category, date and keywords belong to the English side of the CMS.
+    expect(Object.keys(pkg)).toEqual(ID_SECTION_KEYS);
+    expect(pkg).toEqual({
+      title: metadata.headline,
+      excerpt: 'Learn how to select durable, commercial-grade fitness equipment.',
+      tags: ['Commercial Gym', 'Buying Guide'],
+      meta: metadata.metaDescription,
+      body: '<p>Isi</p>',
+    });
+  });
+
+  it('fills English gaps from the article around them', () => {
     const bare: SeoMetadata = {
       seoTitle: 'Bare title',
       headline: '',
@@ -75,12 +104,13 @@ describe('buildArticleJson', () => {
       tags: [],
     };
     const pkg = buildArticleJson({
+      language: 'en',
       metadata: bare,
       generatedAt: GENERATED_AT,
       bodyHtml: '<p>Body</p>',
       categoryFallback: 'Commercial fitness supplier and facility planning',
       keywordFallback: ['treadmill price', 'commercial treadmill'],
-    });
+    }) as ArticleJsonPackage;
     expect(pkg.title).toBe('Bare title');
     expect(pkg.category).toBe('Commercial fitness supplier and facility planning');
     expect(pkg.excerpt).toBe('The description.');
@@ -89,102 +119,24 @@ describe('buildArticleJson', () => {
   });
 
   it('serialises with the body as one JSON string', () => {
-    const raw = serializeArticleJson({ metadata, generatedAt: GENERATED_AT, bodyHtml: '<p>Body</p>' });
+    const raw = serializeArticleJson({
+      language: 'en',
+      metadata,
+      generatedAt: GENERATED_AT,
+      bodyHtml: '<p>Body</p>',
+    });
     expect(JSON.parse(raw)).toMatchObject({ title: metadata.headline });
     expect(raw).toContain('"body": "<p>Body</p>"');
   });
 });
 
-describe('syncJsonFormats', () => {
-  const formats = {
-    'inline-en': '<article><p>English</p></article>',
-    'clean-en': '<style>:root{}</style><article><p>English clean</p></article>',
-    'inline-id': '<article><p>Indonesia</p></article>',
-    'json-en': '{"stale":true}',
-    'json-id': '',
-  };
-
-  it('recognises only the package formats', () => {
-    expect(isJsonFormat('json-id')).toBe(true);
-    expect(isJsonFormat('clean-id')).toBe(false);
+describe('jsonExportName', () => {
+  it('names the file so the extension can read the language off it', () => {
+    expect(jsonExportName('treadmill-guide', 'en')).toBe('treadmill-guide-json-en.json');
+    expect(jsonExportName('treadmill-guide', 'id')).toBe('treadmill-guide-json-id.json');
   });
 
-  it('rebuilds every package from the clean body of its own language', () => {
-    const next = syncJsonFormats(formats, metadata, GENERATED_AT);
-    expect(JSON.parse(next['json-en']!).body).toBe('<p>English clean</p>');
-    expect(JSON.parse(next['json-id']!).body).toBe('<p>Indonesia</p>');
-  });
-
-  it('leaves the HTML formats untouched', () => {
-    const next = syncJsonFormats(formats, metadata, GENERATED_AT);
-    expect(next['clean-en']).toBe(formats['clean-en']);
-  });
-
-  it('drops a package whose language has no rendered HTML', () => {
-    const next = syncJsonFormats(
-      { 'inline-en': '<p>x</p>', 'json-en': '', 'json-id': '' },
-      metadata,
-      GENERATED_AT
-    );
-    expect(next['json-id']).toBeUndefined();
-    expect(next['json-en']).toBeDefined();
-  });
-
-  it('takes a body rendered for the package alone out of the extras', () => {
-    const next = syncJsonFormats(
-      { 'json-en': '' },
-      metadata,
-      GENERATED_AT,
-      { bodyHtml: { en: '<article><p>Body only</p></article>' } }
-    );
-    expect(Object.keys(next)).toEqual(['json-en']);
-    expect(JSON.parse(next['json-en']!).body).toBe('<p>Body only</p>');
-  });
-
-  it('keeps the body of a package no HTML format was checked for', () => {
-    const stored = serializeArticleJson({
-      metadata,
-      generatedAt: GENERATED_AT,
-      bodyHtml: '<p>Body</p>',
-    });
-    const next = syncJsonFormats(
-      { 'json-en': stored },
-      { ...metadata, headline: 'A new headline' },
-      GENERATED_AT
-    );
-    const parsed = JSON.parse(next['json-en']!);
-    expect(parsed.title).toBe('A new headline');
-    expect(parsed.body).toBe('<p>Body</p>');
-  });
-
-  it('still drops a blank package whose language has no HTML format', () => {
-    expect(syncJsonFormats({ 'json-en': '' }, metadata, GENERATED_AT)['json-en']).toBeUndefined();
-  });
-
-  it('drops a package whose HTML format was emptied', () => {
-    const stored = serializeArticleJson({
-      metadata,
-      generatedAt: GENERATED_AT,
-      bodyHtml: '<p>Body</p>',
-    });
-    const next = syncJsonFormats({ 'inline-en': '', 'json-en': stored }, metadata, GENERATED_AT);
-    expect(next['json-en']).toBeUndefined();
-  });
-
-  it('does not touch formats that hold no package', () => {
-    const html = { 'inline-en': '<p>x</p>' };
-    expect(syncJsonFormats(html, metadata, GENERATED_AT)).toEqual(html);
-  });
-});
-
-describe('jsonPackageBody', () => {
-  it('reads the body back out of a package', () => {
-    const raw = serializeArticleJson({ metadata, generatedAt: GENERATED_AT, bodyHtml: '<p>Body</p>' });
-    expect(jsonPackageBody(raw)).toBe('<p>Body</p>');
-  });
-
-  it('returns nothing for text that is not a package', () => {
-    expect(jsonPackageBody('<article><p>HTML</p></article>')).toBe('');
-    expect(jsonPackageBody('{"body":123}')).toBe('');
+  it('names an article without a slug after itself', () => {
+    expect(jsonExportName('   ', 'id')).toBe('article-json-id.json');
   });
 });

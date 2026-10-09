@@ -271,6 +271,17 @@ export function evaluateDraftChecks(
           ? undefined
           : 'Bold a concrete figure, for example **30%**, or place it in a callout',
     },
+    {
+      id: 'cta_present',
+      category: 'rich_media',
+      title: 'Closing Call to Action',
+      description: 'A B2B reader must be invited to request a quotation or consultation at the end.',
+      passed: doc.hasCtaSignal,
+      value: doc.hasCtaSignal ? 'Call to action present' : 'No closing invitation found',
+      recommendation: doc.hasCtaSignal
+        ? undefined
+        : 'End the article with <aside class="cta"> holding one short paragraph and one link',
+    },
   ];
 }
 

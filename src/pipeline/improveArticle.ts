@@ -3,6 +3,7 @@ import type { UserProfile } from '../types/profile';
 import type { MultiAgentConfig } from '../types/provider';
 import { DEFAULT_UNIVERSAL_RULES } from '../config/universalRules';
 import { rulesForFormat } from '../config/brandPresets';
+import { applyTokenCss } from '../config/tokenCss';
 import { runAgent } from './runAgent';
 import { normalizeRenderedHtml } from '../utils/articleShell';
 import { formatFailedChecks, scoreHtml } from './scoreHtml';
@@ -56,6 +57,8 @@ export async function improveArticle(
       language
     );
 
+  const rules = rulesForFormat(profile.designRules, profile.formatOverrides ?? {}, format);
+
   const output = (await runAgent({
     role: 'improver',
     input: {
@@ -81,18 +84,18 @@ export async function improveArticle(
       seoMetadata: article.seoMetadata,
       markdown: article.rawText ?? '',
     },
-    userProfile: {
-      ...profile,
-      designRules: rulesForFormat(profile.designRules, profile.formatOverrides ?? {}, format),
-    },
+    userProfile: { ...profile, designRules: rules },
     providerConfig: multiAgentConfig.designer,
     universalRules: DEFAULT_UNIVERSAL_RULES,
     signal,
   })) as ImproverOutput;
 
   // The repair goes through the same normalizer as a fresh render, so an
-  // improvement cannot reintroduce a page background or a capped width.
-  const repaired = normalizeRenderedHtml(output?.html ?? '');
+  // improvement cannot reintroduce a page background or a capped width, and
+  // through the token pass so it cannot restyle the article off-brand either.
+  const repaired = applyTokenCss(normalizeRenderedHtml(output?.html ?? ''), rules, {
+    mode: cssModeOf(format),
+  }).html;
 
   return {
     html: repaired,

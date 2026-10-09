@@ -76,8 +76,8 @@ export const GenerateView: React.FC<GenerateViewProps> = ({
   }, [articles]);
 
   // Manual edits commit through App state, not the run's own copy, so read the
-  // article back out of the list: the workspace must show what the last write
-  // stored. A derived JSON package has nothing else to rebuild it from.
+  // article back out of the list: the workspace must show and export what the
+  // last write stored, not what the run that opened it produced.
   const liveArticle = useMemo(
     () =>
       currentArticle

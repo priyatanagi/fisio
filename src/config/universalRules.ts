@@ -9,6 +9,8 @@ export interface UniversalRules {
   focusKeyphraseMaxChars: number;
   requireStats: boolean;
   requireFaq: boolean;
+  /** The closing call to action the article must end with. */
+  requireCta: boolean;
   allowInlineScripts: boolean;
   allowH1InArticle: boolean;
 }
@@ -24,13 +26,14 @@ export const DEFAULT_UNIVERSAL_RULES: UniversalRules = {
   focusKeyphraseMaxChars: 20,
   requireStats: true,
   requireFaq: true,
+  requireCta: true,
   allowInlineScripts: false,
   allowH1InArticle: false,
 };
 
-// The five B2B search-exclusion categories currently hardcoded in
-// DEFAULT_NEGATIVE_PROMPT. Kept verbatim so default behaviour is unchanged, but
-// now editable, because a physiotherapy clinic must not inherit
+// The five B2B search-exclusion categories the original Realleader negative
+// prompt hardcoded. Kept verbatim so default behaviour is unchanged, but now
+// editable through the profile, because a physiotherapy clinic must not inherit
 // "exclude clinical rehabilitation".
 export const LEGACY_EXCLUSIONS: string[] = [
   'EXCLUDE consumer gym member searches ("gym terdekat", "membership gym", "gym harian", "daftar member gym"). Target the facility owner or buyer, not consumer gym-goers.',

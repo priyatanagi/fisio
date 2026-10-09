@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { containsStrongFigure, extractDocument, markdownToPlainText } from './document';
+import { containsCallToAction, containsStrongFigure, extractDocument, markdownToPlainText } from './document';
 
 const markdown = `# Judul Utama
 
@@ -327,5 +327,45 @@ describe('extractDocument', () => {
     expect(containsStrongFigure('<strong>tebal</strong>')).toBe(false);
     expect(containsStrongFigure('**tebal**')).toBe(false);
     expect(containsStrongFigure('Teks biasa.')).toBe(false);
+  });
+});
+
+describe('containsCallToAction', () => {
+  const prose = 'Bagian ini berisi penjelasan panjang tentang program. '.repeat(12);
+
+  it('reads the marked block as a call to action', () => {
+    expect(containsCallToAction('<aside class="cta">Minta penawaran.</aside>')).toBe(true);
+    expect(containsCallToAction('<div class="post cta js-cta">Minta.</div>')).toBe(true);
+  });
+
+  it('reads a closing invitation the reader can act on', () => {
+    expect(
+      containsCallToAction(`${prose}Hubungi tim melalui [portal dinas](https://example.org/q).`)
+    ).toBe(true);
+  });
+
+  it('ignores an invitation that sits in the body rather than the close', () => {
+    expect(
+      containsCallToAction(
+        `Minta [penawaran](https://example.org/q) hari ini. ${prose} Penutupnya hanya penjelasan biasa.`
+      )
+    ).toBe(false);
+  });
+
+  it('needs something actionable beside the invitation', () => {
+    expect(containsCallToAction(`${prose}Kami melayani konsultasi gratis untuk dapur sekolah.`)).toBe(
+      false
+    );
+  });
+
+  it('reports the signal the same way for a draft and its render', () => {
+    const markdownDraft = `${markdown}\n\n<aside class="cta">Minta penawaran resmi lewat portal.</aside>\n`;
+    expect(extractDocument(markdownDraft, 'markdown').hasCtaSignal).toBe(true);
+    expect(extractDocument(markdown, 'markdown').hasCtaSignal).toBe(false);
+    expect(extractDocument('<article><p>Teks.</p></article>', 'html').hasCtaSignal).toBe(false);
+    expect(
+      extractDocument('<article><p>Teks.</p><aside class="cta"><a href="/q">Penawaran</a></aside>', 'html')
+        .hasCtaSignal
+    ).toBe(true);
   });
 });
